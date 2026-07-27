@@ -7,6 +7,19 @@ const { parseCsv, stringifyCsv } = require('./csv');
 const { applyRules } = require('./ruleEngine');
 const { autoUpdater } = require('electron-updater');
 
+// Last-resort safety net: without these, any unhandled error/rejection
+// anywhere in the main process (e.g. a stray socket 'error' event from a
+// background IMAP sync) surfaces as Electron's fatal "A JavaScript error
+// occurred in the main process" dialog and kills the whole app. Individual
+// modules should still handle their own errors (see ImapSmtpProvider's
+// client.on('error', ...)) — this is only the floor beneath that.
+process.on('uncaughtException', (err) => {
+  console.error('[Agency OS] Uncaught exception (main process, recovered):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[Agency OS] Unhandled promise rejection (main process, recovered):', reason);
+});
+
 const LEAD_CSV_HEADERS = [
   'businessName', 'category', 'website', 'phone', 'email', 'address',
   'rating', 'reviewCount', 'status', 'priority', 'closeProbability',

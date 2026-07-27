@@ -144,6 +144,15 @@ class ImapSmtpProvider extends ProviderBase {
     const config = this._imapConfig();
     if (!config.host) throw new Error('No IMAP host configured for this account');
     const client = new ImapFlow(config);
+    // imapflow's underlying socket can emit 'error' (e.g. a timeout) outside
+    // the promise chain any await here is part of — without a listener,
+    // Node treats that as an uncaught exception and crashes the whole
+    // Electron main process. Swallowing it here just means the in-flight
+    // operation will fail its own await/reject path instead (which callers
+    // already handle), rather than taking the app down.
+    client.on('error', (err) => {
+      console.error(`[ImapSmtpProvider] IMAP socket error (non-fatal): ${err && err.message ? err.message : err}`);
+    });
     await client.connect();
     return client;
   }
