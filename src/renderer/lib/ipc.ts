@@ -94,6 +94,7 @@ export interface AgencyOSAPI {
   // Replies
   checkReplies(): Promise<ReplyCheckResult>;
   onNewReplies(callback: (replies: NewReply[]) => void): () => void;
+  onLeadAutoEnriched(callback: (payload: { leadId: string }) => void): () => void;
 
   // Files
   exportLeadsCsv(leadIds?: string[]): Promise<{ ok: boolean; filePath?: string; count?: number; error?: string }>;
@@ -148,6 +149,10 @@ export interface ScraperScripts {
   zoomIn: string;
   zoomOut: string;
   detectCaptcha: string;
+  universalScrape: string;
+  universalDismiss: string;
+  universalAutoScroll: string;
+  universalNextPage: string;
 }
 
 export interface ScraperUtils {
@@ -231,6 +236,9 @@ class IpcBridge {
   }
   onNewReplies(callback: (replies: NewReply[]) => void): () => void {
     return this.api.onNewReplies?.(callback) ?? (() => {});
+  }
+  onLeadAutoEnriched(callback: (payload: { leadId: string }) => void): () => void {
+    return this.api.onLeadAutoEnriched?.(callback) ?? (() => {});
   }
 
   // Diagnostics

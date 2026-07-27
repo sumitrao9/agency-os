@@ -317,4 +317,284 @@ const DETECT_CAPTCHA_JS = `
 })();
 `;
 
-module.exports = { SCRAPE_PAGE_JS, AUTO_SCROLL_JS, HOVER_JS, CLICK_LOAD_MORE_JS, DISMISS_COOKIE_BANNER_JS, ZOOM_IN_JS, ZOOM_OUT_JS, panJs, buildSearchUrl, DETECT_CAPTCHA_JS };
+// ============================================================
+// Universal Browser Engine — everything below works on ANY site,
+// no per-site selectors. Same deterministic, no-AI approach as
+// SCRAPE_PAGE_JS's JSON-LD tier, generalized: sites that don't publish
+// schema.org/microdata/Open Graph fall through to a generic repeated-
+// sibling-structure detector (group DOM siblings by tag+class signature,
+// the group with the most similarly-shaped repeats IS the list — the
+// same technique commercial "auto-detect" scrapers like Octoparse use,
+// just without the paid product wrapped around it).
+// ============================================================
+
+// Cookie-consent frameworks in the wild almost all boil down to one of a
+// few vendor widgets (OneTrust, Cookiebot, Quantcast, TrustArc, Osano) or
+// a bare button with predictable text — covering both means this works
+// on the large majority of sites without a single site-specific rule.
+const UNIVERSAL_DISMISS_JS = `
+(function() {
+  let dismissed = 0;
+  const VENDOR_SELECTORS = [
+    '#onetrust-accept-btn-handler',
+    '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+    '.qc-cmp2-summary-buttons button[mode="primary"]',
+    '#truste-consent-button',
+    '.osano-cm-accept-all',
+    '.cc-btn.cc-allow',
+    '#accept-cookies',
+  ];
+  for (const sel of VENDOR_SELECTORS) {
+    try {
+      const el = document.querySelector(sel);
+      if (el && el.offsetParent !== null) { el.click(); dismissed++; }
+    } catch (e) {}
+  }
+
+  // Generic fallback: any visible button/link whose text is a common
+  // consent-accept phrase — same "match by text, not by selector"
+  // principle already proven in CLICK_LOAD_MORE_JS.
+  try {
+    const pattern = /^(accept all|accept cookies|allow all|i accept|agree|got it|ok, got it|understood)$/i;
+    const candidates = document.querySelectorAll('button, a[role="button"]');
+    for (const el of candidates) {
+      const text = (el.innerText || el.textContent || '').trim();
+      if (pattern.test(text) && el.offsetParent !== null) { el.click(); dismissed++; break; }
+    }
+  } catch (e) {}
+
+  // Generic popup/modal dismissal: a fixed/sticky element covering a large
+  // share of the viewport with its own close control — the shape of
+  // newsletter signups, age-gates, and app-install nags regardless of
+  // what site built them.
+  try {
+    const all = document.querySelectorAll('div, section, aside');
+    const vw = window.innerWidth, vh = window.innerHeight;
+    for (const el of all) {
+      const style = window.getComputedStyle(el);
+      if (style.position !== 'fixed' && style.position !== 'sticky') continue;
+      if (parseInt(style.zIndex || '0', 10) < 100) continue;
+      const rect = el.getBoundingClientRect();
+      const coverage = (rect.width * rect.height) / (vw * vh);
+      if (coverage < 0.25) continue; // too small to be a blocking modal
+      const closeBtn = el.querySelector('[aria-label="Close" i], [aria-label="Dismiss" i], .close, .modal-close, [class*="close-button" i]') ||
+        Array.from(el.querySelectorAll('button, a')).find(b => (b.textContent || '').trim() === '\\u00d7' || (b.textContent || '').trim().toLowerCase() === 'close');
+      if (closeBtn) { closeBtn.click(); dismissed++; break; }
+    }
+  } catch (e) {}
+
+  return dismissed;
+})();
+`;
+
+// Scrolls until the page stops growing — the actual definition of
+// "infinite scroll finished" — instead of a fixed step count that either
+// stops short on a long page or over-scrolls a short one.
+const UNIVERSAL_AUTO_SCROLL_JS = `
+(function() {
+  return new Promise((resolve) => {
+    let lastHeight = 0, stableStreak = 0;
+    const MAX_STEPS = 40;
+    const STABLE_STREAK_TARGET = 3; // 3 consecutive no-growth checks = actually done, not just a slow-loading gap
+    let step = 0;
+
+    function tick() {
+      const scroller = document.scrollingElement || document.documentElement;
+      const currentHeight = scroller.scrollHeight;
+      window.scrollBy(0, 400 + Math.random() * 500);
+
+      if (currentHeight === lastHeight) stableStreak++; else stableStreak = 0;
+      lastHeight = currentHeight;
+      step++;
+
+      if (stableStreak >= STABLE_STREAK_TARGET || step >= MAX_STEPS) { resolve({ steps: step, finalHeight: currentHeight }); return; }
+
+      const pause = Math.random() < 0.2 ? 1200 + Math.random() * 800 : 450 + Math.random() * 450;
+      setTimeout(tick, pause);
+    }
+    tick();
+  });
+})();
+`;
+
+// rel="next" (the actual HTML/HTTP standard for this), then the common
+// "Next"/">"/"›" link-text convention used by everything that doesn't
+// bother with rel=next.
+const UNIVERSAL_NEXT_PAGE_JS = `
+(function() {
+  try {
+    const relNext = document.querySelector('a[rel~="next"], link[rel="next"]');
+    if (relNext && relNext.href) return relNext.href;
+    const pattern = /^(next|next page|older|more results|\\u203a|\\u2192|»)$/i;
+    const links = document.querySelectorAll('a[href]');
+    for (const a of links) {
+      const text = (a.innerText || a.textContent || '').trim();
+      if (pattern.test(text) && a.offsetParent !== null) return a.href;
+    }
+    return null;
+  } catch (e) { return null; }
+})();
+`;
+
+// The universal extractor: JSON-LD -> microdata -> Open Graph -> generic
+// repeated-sibling-structure detection. Each tier only runs if the
+// previous one found nothing, cheapest/highest-confidence first.
+const UNIVERSAL_SCRAPE_JS = `
+(function() {
+  const results = [];
+  const seen = new Set();
+  const stats = { containersFound: 0, extracted: 0, tier: '' };
+
+  function addResult(row) {
+    if (!row.businessName || seen.has(row.businessName)) return;
+    seen.add(row.businessName);
+    stats.extracted++;
+    results.push(row);
+  }
+
+  // Tier 1: JSON-LD (same logic as the Maps/Bing extractor — reused here
+  // because a generic business directory is exactly as likely to publish
+  // schema.org as a Maps listing is).
+  try {
+    document.querySelectorAll('script[type="application/ld+json"]').forEach(s => {
+      try {
+        const data = JSON.parse(s.textContent);
+        const items = Array.isArray(data) ? data : (data['@graph'] || [data]);
+        items.forEach(item => {
+          const types = Array.isArray(item['@type']) ? item['@type'] : [item['@type'] || ''];
+          if (!types.some(t => /LocalBusiness|Organization|Restaurant|Store|ProfessionalService|Product|Person/i.test(t))) return;
+          if (!item.name) return;
+          const addr = item.address;
+          const addressStr = addr && typeof addr === 'object'
+            ? [addr.streetAddress, addr.addressLocality, addr.addressRegion, addr.postalCode].filter(Boolean).join(', ')
+            : (addr || '');
+          addResult({
+            businessName: item.name, phone: item.telephone || '', address: addressStr,
+            website: item.url || '', email: item.email || '', category: types.join(', '),
+          });
+        });
+      } catch (e) {}
+    });
+    if (results.length) stats.tier = 'json-ld';
+  } catch (e) {}
+
+  // Tier 2: microdata (itemscope/itemtype) — older but still common,
+  // especially on WordPress/Yoast-generated directory sites.
+  if (!results.length) {
+    try {
+      document.querySelectorAll('[itemscope][itemtype*="schema.org"]').forEach(el => {
+        const type = el.getAttribute('itemtype') || '';
+        if (!/LocalBusiness|Organization|Product|Person/i.test(type)) return;
+        const get = (prop) => el.querySelector('[itemprop="' + prop + '"]');
+        const nameEl = get('name');
+        if (!nameEl) return;
+        addResult({
+          businessName: (nameEl.getAttribute('content') || nameEl.textContent || '').trim(),
+          phone: (get('telephone')?.getAttribute('content') || get('telephone')?.textContent || '').trim(),
+          address: (get('address')?.textContent || '').trim().replace(/\\s+/g, ' '),
+          website: (get('url')?.getAttribute('href') || get('url')?.textContent || '').trim(),
+          email: (get('email')?.textContent || '').trim(),
+          category: type.split('/').pop(),
+        });
+      });
+      if (results.length) stats.tier = 'microdata';
+    } catch (e) {}
+  }
+
+  // Tier 3: generic repeated-sibling-structure detection — the actual
+  // "universal" fallback for sites with no structured data at all.
+  // Groups every element's children by tag+className signature; the
+  // group with the most same-shaped repeats (min 3) is treated as "the
+  // list." This is deliberately structural, not content-based — it works
+  // the same whether the repeated items are business cards, product
+  // tiles, or job postings.
+  if (!results.length) {
+    try {
+      // Chrome, not content — a page's nav/TOC/header/footer is exactly as
+      // structurally repetitive as a real list (that's what made Wikipedia's
+      // table-of-contents outscore its actual data table in testing), so
+      // this excludes anything nested inside them before scoring even starts.
+      const isChrome = (el) => !!el.closest('nav, header, footer, aside, [role="navigation"], .toc, #toc, .navbox, .infobox, .sidebar, .menu');
+
+      const signatureOf = (el) => el.tagName + '.' + (el.className || '').toString().trim().split(/\\s+/).slice(0, 3).join('.');
+      const groups = new Map();
+      document.querySelectorAll('body *').forEach((parent) => {
+        if (isChrome(parent)) return;
+        const bySignature = new Map();
+        for (const child of parent.children) {
+          const sig = signatureOf(child);
+          if (!bySignature.has(sig)) bySignature.set(sig, []);
+          bySignature.get(sig).push(child);
+        }
+        for (const [sig, els] of bySignature) {
+          if (els.length < 3) continue;
+          const key = parent.tagName + '>' + sig;
+          const existing = groups.get(key);
+          if (!existing || els.length > existing.length) groups.set(key, els);
+        }
+      });
+
+      let bestGroup = null;
+      let bestScore = 0;
+      for (const els of groups.values()) {
+        const visible = els.filter((el) => el.offsetParent !== null && (el.innerText || '').trim().length > 10);
+        if (visible.length < 3) continue;
+        // Real listing entries (business cards, product tiles, member
+        // profiles) link somewhere — a directory entry with no link is the
+        // exception, not the rule. Prose sections (article headings, TOC
+        // entries) mostly don't. This is what actually separates "a list of
+        // things" from "a page that happens to repeat structurally" once
+        // the nav/header/footer/TOC exclusion above still lets something
+        // through (e.g. a wiki-style article's per-section heading wrapper).
+        const withLink = visible.filter((el) => el.querySelector('a[href]')).length;
+        if (withLink / visible.length < 0.5) continue;
+        const avgLen = visible.reduce((sum, el) => sum + (el.innerText || '').length, 0) / visible.length;
+        const score = visible.length * Math.min(avgLen, 400); // frequency x substance, capped so one giant card doesn't dominate
+        if (score > bestScore) { bestScore = score; bestGroup = visible; }
+      }
+
+      if (bestGroup) {
+        stats.tier = 'generic-structure';
+        stats.containersFound = bestGroup.length;
+        const PHONE_RE = /(\\+?\\(?\\d{1,4}\\)?[\\s\\-]?\\d{2,4}[\\s\\-]?\\d{3,4}[\\s\\-]?\\d{0,4})/;
+        const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/;
+        const ADDRESS_RE = /\\d+\\s+[A-Za-z0-9.\\s]+\\b(St|Rd|Ave|Dr|Blvd|Hwy|Street|Road|Way|Ln|Pl)\\b/i;
+
+        bestGroup.forEach((container) => {
+          try {
+            const heading = container.querySelector('h1, h2, h3, h4, [class*="title" i], [class*="name" i], a');
+            const name = (heading?.textContent || container.textContent || '').trim().split('\\n')[0].slice(0, 120);
+            if (!name || name.length < 2) return;
+
+            const text = container.innerText || '';
+            const mailtoEl = container.querySelector('a[href^="mailto:"]');
+            const telEl = container.querySelector('a[href^="tel:"]');
+            const externalLink = container.querySelector('a[href^="http"]:not([href*="' + location.hostname + '"])');
+
+            const email = (mailtoEl ? mailtoEl.href.replace('mailto:', '') : (text.match(EMAIL_RE) || [])[0]) || '';
+            const phone = (telEl ? telEl.href.replace('tel:', '') : (text.match(PHONE_RE) || [])[0]) || '';
+            const addressMatch = text.match(ADDRESS_RE);
+
+            addResult({
+              businessName: name,
+              phone: phone.trim(),
+              email: email.trim(),
+              website: externalLink ? externalLink.href : '',
+              address: addressMatch ? addressMatch[0].trim() : '',
+              category: '',
+            });
+          } catch (e) {}
+        });
+      }
+    } catch (e) {}
+  }
+
+  return { rows: results, stats };
+})();
+`;
+
+module.exports = {
+  SCRAPE_PAGE_JS, AUTO_SCROLL_JS, HOVER_JS, CLICK_LOAD_MORE_JS, DISMISS_COOKIE_BANNER_JS,
+  ZOOM_IN_JS, ZOOM_OUT_JS, panJs, buildSearchUrl, DETECT_CAPTCHA_JS,
+  UNIVERSAL_SCRAPE_JS, UNIVERSAL_DISMISS_JS, UNIVERSAL_AUTO_SCROLL_JS, UNIVERSAL_NEXT_PAGE_JS,
+};

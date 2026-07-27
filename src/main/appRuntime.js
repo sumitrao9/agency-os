@@ -387,6 +387,36 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
     };
   }
 
+  // Fired-and-forgotten right after a new lead lands (see 'leads:capture'
+  // below) — turns "capture → scan → score → find email" from four manual
+  // clicks into one. Runs one lead at a time inline (no queue needed: new
+  // captures arrive one at a time from the scraper/extension, unlike a
+  // bulk CSV import which already has startBulkEnrichment for that).
+  async function autoEnrichNewLead(leadId) {
+    if (!state.db) return;
+    const lead = state.db.getAllLeads().find((l) => l.id === leadId);
+    if (!lead || !lead.website) return;
+
+    try {
+      await runFullEnrichment(lead, { website: lead.website });
+
+      const scanned = state.db.getAllLeads().find((l) => l.id === leadId);
+      if (scanned && !scanned.email) {
+        const result = await discoverEmail(scanned.website);
+        if (result.ok && result.email) {
+          const fields = { email: result.email };
+          if (result.contactPageUrl) fields.customFields = { ...(scanned.customFields || {}), contactPageUrl: result.contactPageUrl, ...(result.guessed ? { emailGuessed: true } : {}) };
+          state.db.updateLead(leadId, fields);
+        }
+      }
+    } catch (e) {
+      recordError(`Auto-enrich failed for lead ${leadId}: ${e.message || e}`);
+    }
+
+    const win = state.mainWindow;
+    if (win && !win.isDestroyed()) win.webContents.send('leads:autoEnriched', { leadId });
+  }
+
   // --- Bulk enrichment job (runs in the background, one lead at a time,
   // so a 50-lead selection doesn't freeze the UI or hammer sites at once) ---
   let bulkJob = null;
@@ -727,7 +757,16 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
       case 'leads:capture': {
         if (!state.db) return { ok: false, error: 'Database not ready' };
         const captureResult = state.db.upsertLead(payload);
-        if (captureResult.inserted) notifyWebhookOfCapture({ ...payload, id: captureResult.id });
+        if (captureResult.inserted) {
+          notifyWebhookOfCapture({ ...payload, id: captureResult.id });
+          // Not awaited — capture returns immediately, scan/score/email-find
+          // happens in the background. Skipped for CSV imports: those can be
+          // dozens of rows in a tight loop (see main.js), and firing a hidden-
+          // BrowserWindow scan per row with no concurrency cap would hammer
+          // every imported site at once. Bulk imports already have a proper
+          // one-at-a-time path via bulk:startDeepScan.
+          if (payload.website && payload.leadSource !== 'csv-import') autoEnrichNewLead(captureResult.id);
+        }
         return captureResult;
       }
       case 'spoof:save':

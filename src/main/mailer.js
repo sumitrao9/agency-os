@@ -16,6 +16,14 @@ function createTransport({ email, appPassword }) {
   return nodemailer.createTransport({
     service: 'gmail',
     auth: { user: email, pass: appPassword },
+    // Nodemailer's own defaults (2min connect / 10min socket) mean a
+    // flaky network or restrictive firewall leaves the "Save & Verify"
+    // button stuck on "Verifying..." for minutes with no feedback —
+    // failing fast here means the UI can actually report back quickly
+    // instead of looking hung.
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 15000,
   });
 }
 

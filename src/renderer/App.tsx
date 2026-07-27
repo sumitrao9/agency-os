@@ -131,6 +131,15 @@ export default function App() {
     return unsubscribe;
   }, [addToast, refreshLeads]);
 
+  // A newly captured lead gets scanned, scored, and email-discovered
+  // automatically in the background (see autoEnrichNewLead in
+  // appRuntime.js) — this just refreshes the table when that finishes, so
+  // score/email fill in without the user having to click anything.
+  useEffect(() => {
+    const unsubscribe = ipc.onLeadAutoEnriched(() => refreshLeads());
+    return unsubscribe;
+  }, [refreshLeads]);
+
   // Health check on startup
   useEffect(() => {
     (async () => {

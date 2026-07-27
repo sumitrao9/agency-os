@@ -19,6 +19,10 @@ try {
     zoomOut: pageScraper.ZOOM_OUT_JS,
     pan: (direction) => pageScraper.panJs(direction),
     detectCaptcha: pageScraper.DETECT_CAPTCHA_JS,
+    universalScrape: pageScraper.UNIVERSAL_SCRAPE_JS,
+    universalDismiss: pageScraper.UNIVERSAL_DISMISS_JS,
+    universalAutoScroll: pageScraper.UNIVERSAL_AUTO_SCROLL_JS,
+    universalNextPage: pageScraper.UNIVERSAL_NEXT_PAGE_JS,
   };
   scraperUtils = {
     buildSearchUrl: pageScraper.buildSearchUrl,
@@ -70,6 +74,11 @@ const bridgeApi = {
     const listener = (_event, replies) => callback(replies);
     ipcRenderer.on('replies:new', listener);
     return () => ipcRenderer.removeListener('replies:new', listener);
+  },
+  onLeadAutoEnriched: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('leads:autoEnriched', listener);
+    return () => ipcRenderer.removeListener('leads:autoEnriched', listener);
   },
   exportLeadsCsv: (leadIds) => ipcRenderer.invoke('files:exportCsv', leadIds),
   importLeadsCsv: () => ipcRenderer.invoke('files:importCsv'),

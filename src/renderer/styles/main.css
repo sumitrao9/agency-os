@@ -281,7 +281,13 @@ input::placeholder, textarea::placeholder {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg);
+  /* Transparent on purpose — body's layered grid-glow background (see
+     globals.css) must show through here, or every glass panel's
+     backdrop-filter blur in every non-Dashboard module blurs a flat color
+     instead of the ambient glow and looks completely dead. This was the
+     actual bug behind "only the Dashboard has color": its KPI tiles hide
+     the flatness under their own opaque gradients; nothing else did. */
+  background: transparent;
 }
 
 /* --- Topbar (Raycast-inspired, glass) --- */

@@ -61,6 +61,8 @@ interface ScrapeParams {
   location: string;
   maxLeads: number;
   fullArea: boolean;
+  universalMode: boolean;
+  crawlDepth: number;
 }
 
 interface ScanCounters { found: number; newLeads: number; duplicates: number; emails: number; websites: number; errors: number; }
@@ -129,7 +131,7 @@ export default function BrowserModule() {
   // --- Scrape Mode state (merged from the old standalone Scraper module —
   // same webview, same power, one workspace instead of two) ---
   const [scrapeMode, setScrapeMode] = useState(false);
-  const [params, setParams] = useState<ScrapeParams>({ source: 'google', niche: '', location: '', maxLeads: 50, fullArea: false });
+  const [params, setParams] = useState<ScrapeParams>({ source: 'google', niche: '', location: '', maxLeads: 50, fullArea: false, universalMode: false, crawlDepth: 1 });
   const [isRunning, setIsRunning] = useState(false);
   const [status, setStatus] = useState('');
   const [captured, setCaptured] = useState(0);
@@ -261,11 +263,17 @@ export default function BrowserModule() {
   const handleSaveProxy = async () => {
     setSavingProxy(true);
     try {
-      const result = await ipc.setBrowserProxy(activeProfile.partition, proxyInput.trim());
+      // One proxy per line -> Chromium's own comma-separated fallback list
+      // ("proxy1,proxy2,proxy3" with no scheme prefix applies to all URL
+      // types). Chromium automatically tries the next entry when one fails
+      // to connect — real rotation-on-failure, built into session.setProxy,
+      // no hand-rolled retry loop needed.
+      const proxyList = proxyInput.split('\n').map((s) => s.trim()).filter(Boolean).join(',');
+      const result = await ipc.setBrowserProxy(activeProfile.partition, proxyList);
       if (result.ok) {
         const next = profiles.map((p) => p.name === activeProfile.name ? { ...p, proxy: proxyInput.trim() } : p);
         persistProfiles(next);
-        addToast(proxyInput.trim() ? 'Proxy applied' : 'Proxy cleared', 'success');
+        addToast(proxyList ? 'Proxy applied' : 'Proxy cleared', 'success');
       } else {
         addToast(result.error || 'Failed to set proxy', 'error');
       }
@@ -534,13 +542,117 @@ export default function BrowserModule() {
     while (!readyRef.current && Date.now() - start < 15000) await new Promise((r) => setTimeout(r, 200));
   }, []);
 
+  // Universal Browser Engine: the generic, any-site path (see
+  // pageScraper.js's UNIVERSAL_* scripts). Deliberately a separate loop
+  // from the Maps/Bing-specific one below rather than a branch woven
+  // through it — pan/zoom/hover only make sense on a map canvas, and
+  // forcing both cases through one function would make neither path
+  // trustworthy. This one instead: dismiss consent/popups, scroll until
+  // the page stops growing, extract, optionally follow "Next page" up to
+  // a user-set depth (same-origin only, so this never wanders off-site).
+  const runUniversalScan = useCallback(async (p: ScrapeParams, onProgress?: (captured: number) => void, onLeadCaptured?: (leadId: string) => void): Promise<number> => {
+    const webview = webviewRef.current;
+    if (!webview) return 0;
+    let totalCaptured = 0;
+    let page = 0;
+    const c = { ...EMPTY_COUNTERS };
+    const preset = ANTI_BAN_PRESETS[antiBanPreset];
+    const startOrigin = (() => { try { return new URL(webview.getURL()).origin; } catch { return ''; } })();
+    startTimeRef.current = Date.now();
+
+    while (runningRef.current && page < p.crawlDepth && totalCaptured < p.maxLeads) {
+      page++;
+      setStatus(`Universal scan — page ${page}/${p.crawlDepth}, ${totalCaptured} captured so far...`);
+      logActivity(`Universal scan: page ${page} started`);
+
+      try {
+        try { await webview.executeJavaScript(ipc.scraperScripts.universalDismiss); } catch {}
+
+        let captchaDetected = false;
+        try { captchaDetected = await webview.executeJavaScript(ipc.scraperScripts.detectCaptcha); } catch {}
+        if (captchaDetected) {
+          const msg = 'CAPTCHA detected — paused. Solve it in the browser, then click Resume.';
+          setStatus(msg); logError(msg);
+          setCaptchaPaused(true);
+          await new Promise<void>((resolve) => { captchaResumeRef.current = resolve; });
+          setCaptchaPaused(false);
+          if (!runningRef.current) break;
+          logActivity('Resumed after CAPTCHA');
+        }
+
+        try { await webview.executeJavaScript(ipc.scraperScripts.universalAutoScroll); } catch {}
+        await new Promise((r) => setTimeout(r, preset.preScrapeDelay));
+
+        const result = await webview.executeJavaScript(ipc.scraperScripts.universalScrape);
+        const rows = (result && result.rows) || [];
+        const stats = (result && result.stats) || {};
+        logActivity(`Page ${page}: extraction tier "${stats.tier || 'none'}", ${rows.length} row(s) found`);
+
+        for (const row of rows) {
+          if (!row.businessName) continue;
+          c.found++;
+          if (row.email) c.emails++;
+          if (row.website) c.websites++;
+          const captureResult = await ipc.captureLead({ ...row, leadSource: 'scraper-universal', useDomainDedup: domainDedup });
+          const entry: LatestLead = { businessName: row.businessName, website: row.website, email: row.email, phone: row.phone, status: 'saved' };
+          if (captureResult && captureResult.inserted) {
+            totalCaptured++; c.newLeads++;
+            setLatestLead(entry);
+            setResultsLog((prev) => [entry, ...prev].slice(0, 300));
+            logActivity(`Saved: ${row.businessName}`);
+            if (captureResult.id) onLeadCaptured?.(captureResult.id);
+          } else if (captureResult && captureResult.duplicate) {
+            c.duplicates++;
+            setResultsLog((prev) => [{ ...entry, status: 'duplicate' as const }, ...prev].slice(0, 300));
+          } else if (!captureResult || !captureResult.blacklisted) {
+            c.errors++;
+          }
+          if (totalCaptured >= p.maxLeads) break;
+        }
+        setCaptured(totalCaptured);
+        setCounters({ ...c });
+        onProgress?.(totalCaptured);
+
+        if (page >= p.crawlDepth || totalCaptured >= p.maxLeads) break;
+
+        const nextUrl: string | null = await webview.executeJavaScript(ipc.scraperScripts.universalNextPage);
+        if (!nextUrl) { logActivity('No further "Next page" link found — stopping.'); break; }
+        // Same-origin only — this is a bounded "follow pagination on this
+        // one listing," not an open-ended site crawler.
+        try { if (new URL(nextUrl).origin !== startOrigin) { logActivity('Next link left the original site — stopping.'); break; } } catch { break; }
+
+        navigate(nextUrl);
+        await waitForReady();
+        await new Promise((r) => setTimeout(r, preset.cycleDelayMin + Math.random() * (preset.cycleDelayMax - preset.cycleDelayMin)));
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        logError(`Universal scan page ${page} failed (${errMsg}) — stopping.`);
+        break;
+      }
+    }
+
+    runningRef.current = false;
+    setIsRunning(false);
+    setRanOnce(true);
+    setStatus(`Universal scan complete: ${totalCaptured} lead(s) captured across ${page} page(s).`);
+    return totalCaptured;
+  }, [logActivity, logError, antiBanPreset, domainDedup, navigate, waitForReady]);
+
   const runScan = useCallback(async (p: ScrapeParams, onProgress?: (captured: number) => void, onLeadCaptured?: (leadId: string) => void): Promise<number> => {
+    if (p.universalMode) return runUniversalScan(p, onProgress, onLeadCaptured);
     const webview = webviewRef.current;
     if (!webview) return 0;
     let cycle = 0, emptyStreak = 0, zoomOutAttempts = 0, totalCaptured = 0, consecutiveFailures = 0;
     const stopAfterEmptyCycles = p.fullArea ? 3 : 4;
     const MAX_CONSECUTIVE_FAILURES = 4;
     const preset = ANTI_BAN_PRESETS[antiBanPreset];
+    // Adaptive pacing: a CAPTCHA is the site telling us it's watching more
+    // closely than usual — each hit multiplies the delays for a while
+    // rather than immediately going back to full speed after Resume. Decays
+    // back toward 1x after a run of clean cycles so a one-off challenge
+    // doesn't permanently slow down the rest of the scan.
+    let paceMultiplier = 1;
+    const MAX_PACE_MULTIPLIER = 6;
     const c = { ...EMPTY_COUNTERS };
     startTimeRef.current = Date.now();
 
@@ -559,18 +671,23 @@ export default function BrowserModule() {
         let captchaDetected = false;
         try { captchaDetected = await webview.executeJavaScript(ipc.scraperScripts.detectCaptcha); } catch {}
         if (captchaDetected) {
-          const msg = 'CAPTCHA detected — paused. Solve it in the browser, then click Resume.';
+          paceMultiplier = Math.min(paceMultiplier * 1.6, MAX_PACE_MULTIPLIER);
+          const msg = `CAPTCHA detected — paused. Solve it in the browser, then click Resume. Pacing slowed to ${paceMultiplier.toFixed(1)}x for the rest of this scan.`;
           setStatus(msg); logError(msg);
           setCaptchaPaused(true);
           await new Promise<void>((resolve) => { captchaResumeRef.current = resolve; });
           setCaptchaPaused(false);
           if (!runningRef.current) break;
           logActivity('Resumed after CAPTCHA');
+        } else {
+          // No challenge this cycle — ease back toward normal speed instead
+          // of staying slowed down for the rest of the run.
+          paceMultiplier = Math.max(1, paceMultiplier * 0.92);
         }
 
         await webview.executeJavaScript(ipc.scraperScripts.autoScroll);
         try { await webview.executeJavaScript(ipc.scraperScripts.hover); } catch {} // human-like pointer movement before reading the page
-        await new Promise((r) => setTimeout(r, preset.preScrapeDelay));
+        await new Promise((r) => setTimeout(r, preset.preScrapeDelay * paceMultiplier));
 
         const result = await webview.executeJavaScript(ipc.scraperScripts.scrapePage);
         const rows = (result && result.rows) || [];
@@ -628,7 +745,7 @@ export default function BrowserModule() {
           emptyStreak = 0;
         }
         consecutiveFailures = 0;
-        await new Promise((r) => setTimeout(r, preset.cycleDelayMin + Math.random() * (preset.cycleDelayMax - preset.cycleDelayMin)));
+        await new Promise((r) => setTimeout(r, (preset.cycleDelayMin + Math.random() * (preset.cycleDelayMax - preset.cycleDelayMin)) * paceMultiplier));
       } catch (e) {
         c.errors++; setCounters({ ...c });
         consecutiveFailures++;
@@ -658,7 +775,7 @@ export default function BrowserModule() {
     setStatus(finalMsg);
     logActivity(finalMsg);
     return totalCaptured;
-  }, [logActivity, logError, antiBanPreset, domainDedup]);
+  }, [logActivity, logError, antiBanPreset, domainDedup, runUniversalScan]);
 
   // Shared by manual "Start Scrape" and Autopilot — takes params explicitly
   // (rather than reading the `params` state) so a queued job's config can't
@@ -786,7 +903,7 @@ export default function BrowserModule() {
       let failed = false;
       try {
         thisRunCaptured = await startScrapeWithParams(
-          { source: next.source, niche: next.niche, location: next.location, maxLeads: remainingTarget, fullArea: next.fullArea },
+          { source: next.source, niche: next.niche, location: next.location, maxLeads: remainingTarget, fullArea: next.fullArea, universalMode: false, crawlDepth: 1 },
           (progress) => updateAutopilotJob(next.id, { captured: baseCaptured + progress }),
         );
       } catch (e) {
@@ -932,9 +1049,19 @@ export default function BrowserModule() {
                     <input type="number" value={params.maxLeads} onChange={(e) => setParams({ ...params, maxLeads: parseInt(e.target.value) || 10 })} min="1" max="500" disabled={isRunning} />
                   </div>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--font-size-sm)' }}>
-                    <input type="checkbox" checked={params.fullArea} onChange={(e) => setParams({ ...params, fullArea: e.target.checked })} disabled={isRunning} />
+                    <input type="checkbox" checked={params.fullArea} onChange={(e) => setParams({ ...params, fullArea: e.target.checked })} disabled={isRunning || params.universalMode} />
                     Scan full area (pan + zoom out once exhausted)
                   </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--font-size-sm)' }} title="Works on any site, not just Maps/Bing — schema.org, then generic repeated-card detection. Use this for directories, listing sites, or anywhere outside the built-in Maps/Bing scraper.">
+                    <input type="checkbox" checked={params.universalMode} onChange={(e) => setParams({ ...params, universalMode: e.target.checked })} disabled={isRunning} />
+                    Universal mode (any site, not just Maps/Bing)
+                  </label>
+                  {params.universalMode && (
+                    <div className="field-group">
+                      <label>Follow "Next page" up to</label>
+                      <input type="number" value={params.crawlDepth} onChange={(e) => setParams({ ...params, crawlDepth: Math.max(1, parseInt(e.target.value) || 1) })} min="1" max="20" disabled={isRunning} />
+                    </div>
+                  )}
                   <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: 'var(--font-size-sm)' }}>
                     <input type="checkbox" checked={autoZoom} onChange={(e) => setAutoZoom(e.target.checked)} />
                     Auto-zoom to a wide starting view before scanning
@@ -1125,11 +1252,16 @@ export default function BrowserModule() {
                       </div>
                       <div style={{ borderTop: '1px solid var(--border-glass)', paddingTop: 'var(--space-2)', display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <div style={{ fontSize: 'var(--font-size-xs)', fontWeight: 600 }}>Proxy for "{activeProfile.name}"</div>
-                        <input
+                        <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>
+                          One per line. With more than one, Chromium automatically falls back to the next when one fails to connect.
+                        </div>
+                        <textarea
                           className="input"
-                          placeholder="e.g. http://user:pass@host:port"
+                          placeholder={'http://user:pass@host:port\nhttp://user:pass@host2:port2'}
+                          rows={3}
                           value={proxyInput}
                           onChange={(e) => setProxyInput(e.target.value)}
+                          style={{ resize: 'vertical', fontFamily: 'var(--font-mono, monospace)' }}
                         />
                         <button className="btn-primary" onClick={handleSaveProxy} disabled={savingProxy}>
                           {savingProxy ? '⟳ Applying…' : proxyInput.trim() ? 'Apply Proxy' : 'Clear Proxy'}

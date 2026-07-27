@@ -20,6 +20,7 @@ export default function EmailModule() {
   const [email, setEmail] = useState('');
   const [appPassword, setAppPassword] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
+  const [savingCreds, setSavingCreds] = useState(false);
   const [sendCount, setSendCount] = useState({ count: 0, warnAt: 0, hardStopAt: 0 });
 
   // Compose state
@@ -73,6 +74,8 @@ export default function EmailModule() {
       setSaveStatus('Enter both fields');
       return;
     }
+    if (savingCreds) return; // already in flight — the button below is disabled too, this just guards double-invocation
+    setSavingCreds(true);
     setSaveStatus('Verifying...');
     try {
       const result = await ipc.saveEmailCredentials(email, appPassword);
@@ -85,6 +88,8 @@ export default function EmailModule() {
       }
     } catch (e) {
       setSaveStatus(`✗ ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSavingCreds(false);
     }
   };
 
@@ -397,7 +402,7 @@ export default function EmailModule() {
             <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">Google App Passwords</a>.
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <button className="btn-primary" onClick={handleSaveCredentials}>Save &amp; Verify</button>
+            <button className="btn-primary" onClick={handleSaveCredentials} disabled={savingCreds}>{savingCreds ? '⟳ Verifying…' : 'Save & Verify'}</button>
             {saveStatus && <span style={{ fontSize: 'var(--font-size-sm)' }}>{saveStatus}</span>}
           </div>
         </div>
