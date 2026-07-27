@@ -1,0 +1,101 @@
+{
+  "name": "agency-os",
+  "version": "1.12.0",
+  "description": "Personal Agency Operating System — lead workspace, rule-based scoring, and SMTP outreach for a single power user.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "test": "node test_backend.js && node test_rules_email.js && node test_escalation_logic.js && node test_maps_urls.js && node test_scraper_utils.js && node test_followup_dedup.js && node test_automation_console_persistence.js && node test_runtime_architecture.js && node test_workflow_engine.js && node test_reply_tracker.js",
+    "build": "vite build",
+    "smoke": "npm run build && electron test_renderer_smoke.js",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "release": "npm run build && electron-builder --publish always",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint src --ext .ts,.tsx"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@ghostery/adblocker-electron": "^2.18.1",
+    "@tanstack/react-virtual": "^3.14.8",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^6.0.4",
+    "autoprefixer": "^10.5.4",
+    "axe-core": "^4.12.1",
+    "cheerio": "^1.2.0",
+    "electron-updater": "^6.8.9",
+    "imapflow": "^1.5.0",
+    "lucide-react": "^1.27.0",
+    "nodemailer": "^9.0.3",
+    "postcss": "^8.5.23",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-resizable-panels": "^2.1.9",
+    "sql.js": "^1.14.1",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.7.3",
+    "vite": "^8.1.5",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.19.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "eslint": "^9.19.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.19",
+    "jsdom": "^29.1.1",
+    "typescript-eslint": "^8.21.0"
+  },
+  "build": {
+    "appId": "com.agencyos.desktop",
+    "productName": "AgencyOS",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "dist/renderer/**/*",
+      "package.json",
+      "!src/**/*.test.js"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "sumitrao9",
+      "repo": "agency-os",
+      "private": true
+    },
+    "mac": {
+      "category": "public.app-category.business",
+      "icon": "build-assets/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "build-assets/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AgencyOS"
+    },
+    "linux": {
+      "icon": "build-assets/icon.png",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
+  }
+}
