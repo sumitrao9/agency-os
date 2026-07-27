@@ -10,6 +10,11 @@ import type {
   SendEmailResult,
   RenderedEmail,
   FollowUpRender,
+  EmailAccount,
+  AddEmailAccountInput,
+  AddEmailAccountResult,
+  OAuthAppInfo,
+  EmailSyncResult,
   LocationSpoof,
   HealthStatus,
   CaptureResult,
@@ -56,9 +61,19 @@ export interface AgencyOSAPI {
   // Email
   getEmailAccountStatus(): Promise<EmailAccountStatus>;
   saveEmailCredentials(email: string, appPassword: string): Promise<{ ok: boolean; encrypted?: boolean; error?: string }>;
-  sendEmail(to: string, subject: string, body: string, fromName: string, inReplyTo?: string, references?: string, leadId?: string): Promise<SendEmailResult>;
+  sendEmail(accountId: string, to: string, subject: string, body: string, fromName: string, inReplyTo?: string, references?: string, leadId?: string): Promise<SendEmailResult>;
   renderTemplate(templateName: string, lead: Lead): Promise<RenderedEmail>;
   renderFollowUp(stage: string, lead: Lead): Promise<FollowUpRender>;
+
+  // Email accounts (multi-account layer)
+  listEmailAccounts(): Promise<EmailAccount[]>;
+  addEmailAccount(config: AddEmailAccountInput): Promise<AddEmailAccountResult>;
+  removeEmailAccount(accountId: string): Promise<{ ok: boolean }>;
+  verifyEmailAccount(accountId: string): Promise<{ ok: boolean; error?: string }>;
+  startEmailOAuth(provider: 'google' | 'microsoft'): Promise<{ ok: boolean; accountId?: string; error?: string }>;
+  getOAuthApp(provider: 'google' | 'microsoft'): Promise<OAuthAppInfo>;
+  saveOAuthApp(provider: 'google' | 'microsoft', clientId: string, clientSecret: string, redirectUri?: string): Promise<{ ok: boolean }>;
+  syncEmail(accountId?: string): Promise<EmailSyncResult>;
 
   // Location spoof
   saveLocationSpoof(config: LocationSpoof): Promise<void>;
@@ -75,7 +90,7 @@ export interface AgencyOSAPI {
   applyAutomationConsoleAction(action: ConsoleAction): Promise<AutomationConsoleState>;
 
   // Email send count
-  getSendCount(): Promise<{ date: string; count: number; warnAt: number; hardStopAt: number }>;
+  getSendCount(accountId?: string): Promise<{ date: string; count: number; warnAt: number; hardStopAt: number }>;
 
   // Theme/Settings
   getThemeSettings(): Promise<ThemeSettings>;
@@ -194,9 +209,19 @@ class IpcBridge {
   // Email
   async getEmailAccountStatus(): Promise<EmailAccountStatus> { return this.api.getEmailAccountStatus?.() ?? { configured: false }; }
   async saveEmailCredentials(email: string, appPassword: string): Promise<{ ok: boolean; encrypted?: boolean; error?: string }> { return this.api.saveEmailCredentials?.(email, appPassword) ?? { ok: false, error: 'Not available' }; }
-  async sendEmail(to: string, subject: string, body: string, fromName: string, inReplyTo?: string, references?: string, leadId?: string): Promise<SendEmailResult> { return this.api.sendEmail?.(to, subject, body, fromName, inReplyTo, references, leadId) ?? { ok: false, error: 'Not available' }; }
+  async sendEmail(accountId: string, to: string, subject: string, body: string, fromName: string, inReplyTo?: string, references?: string, leadId?: string): Promise<SendEmailResult> { return this.api.sendEmail?.(accountId, to, subject, body, fromName, inReplyTo, references, leadId) ?? { ok: false, error: 'Not available' }; }
   async renderTemplate(templateName: string, lead: Lead): Promise<RenderedEmail> { return this.api.renderTemplate?.(templateName, lead) ?? { subject: '', body: '' }; }
   async renderFollowUp(stage: string, lead: Lead): Promise<FollowUpRender> { return this.api.renderFollowUp?.(stage, lead) ?? { subject: '', body: '' }; }
+
+  // Email accounts (multi-account layer)
+  async listEmailAccounts(): Promise<EmailAccount[]> { return this.api.listEmailAccounts?.() ?? []; }
+  async addEmailAccount(config: AddEmailAccountInput): Promise<AddEmailAccountResult> { return this.api.addEmailAccount?.(config) ?? { ok: false, error: 'Not available' }; }
+  async removeEmailAccount(accountId: string): Promise<{ ok: boolean }> { return this.api.removeEmailAccount?.(accountId) ?? { ok: false }; }
+  async verifyEmailAccount(accountId: string): Promise<{ ok: boolean; error?: string }> { return this.api.verifyEmailAccount?.(accountId) ?? { ok: false, error: 'Not available' }; }
+  async startEmailOAuth(provider: 'google' | 'microsoft'): Promise<{ ok: boolean; accountId?: string; error?: string }> { return this.api.startEmailOAuth?.(provider) ?? { ok: false, error: 'Not available' }; }
+  async getOAuthApp(provider: 'google' | 'microsoft'): Promise<OAuthAppInfo> { return this.api.getOAuthApp?.(provider) ?? { clientId: '', source: 'built-in' }; }
+  async saveOAuthApp(provider: 'google' | 'microsoft', clientId: string, clientSecret: string, redirectUri?: string): Promise<{ ok: boolean }> { return this.api.saveOAuthApp?.(provider, clientId, clientSecret, redirectUri) ?? { ok: false }; }
+  async syncEmail(accountId?: string): Promise<EmailSyncResult> { return this.api.syncEmail?.(accountId) ?? { ok: false, newMessages: [] }; }
 
   // Location spoof
   async saveLocationSpoof(config: LocationSpoof): Promise<void> { return this.api.saveLocationSpoof?.(config); }
@@ -213,8 +238,8 @@ class IpcBridge {
   async applyAutomationConsoleAction(action: ConsoleAction): Promise<AutomationConsoleState> { return this.api.applyAutomationConsoleAction?.(action) ?? { jobs: [], queue: [], alerts: [] }; }
 
   // Email send count
-  async getSendCount(): Promise<{ date: string; count: number; warnAt: number; hardStopAt: number }> {
-    return this.api.getSendCount?.() ?? { date: '', count: 0, warnAt: 0, hardStopAt: 0 };
+  async getSendCount(accountId?: string): Promise<{ date: string; count: number; warnAt: number; hardStopAt: number }> {
+    return this.api.getSendCount?.(accountId) ?? { date: '', count: 0, warnAt: 0, hardStopAt: 0 };
   }
 
   // Theme/Settings

@@ -64,6 +64,64 @@ CREATE TABLE IF NOT EXISTS blacklist (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_blacklist_match ON blacklist(matchType, value);
+
+-- Email Subsystem Phase 1: multi-account layer replacing the old single
+-- smtp-credentials.json singleton. See src/main/email/ for the engine that
+-- reads/writes these tables.
+CREATE TABLE IF NOT EXISTS email_accounts (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  provider TEXT NOT NULL,          -- 'gmail' | 'outlook' | 'imap'
+  authType TEXT NOT NULL,          -- 'oauth' | 'app_password'
+  displayName TEXT,
+  signature TEXT,
+  imapHost TEXT, imapPort INTEGER,
+  smtpHost TEXT, smtpPort INTEGER,
+  credentialsEncrypted TEXT,       -- safeStorage blob: refresh token OR app password, base64
+  status TEXT DEFAULT 'unverified',-- 'ok' | 'error' | 'unverified'
+  lastError TEXT,
+  lastSyncUid INTEGER DEFAULT 0,   -- persisted IMAP cursor
+  dailySendCount INTEGER DEFAULT 0,
+  dailySendDate TEXT,
+  createdAt TEXT
+);
+
+CREATE TABLE IF NOT EXISTS threads (
+  id TEXT PRIMARY KEY,
+  accountId TEXT NOT NULL,
+  leadId TEXT,
+  subject TEXT,
+  lastMessageAt TEXT
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  threadId TEXT NOT NULL,
+  accountId TEXT NOT NULL,
+  leadId TEXT,
+  direction TEXT NOT NULL,         -- 'outbound' | 'inbound'
+  fromAddr TEXT, toAddr TEXT,
+  subject TEXT,
+  bodyText TEXT,
+  snippet TEXT,
+  messageId TEXT,
+  inReplyTo TEXT,
+  uid INTEGER,
+  status TEXT,                     -- 'sent' | 'failed' | 'received'
+  at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(threadId);
+CREATE INDEX IF NOT EXISTS idx_messages_lead ON messages(leadId);
+
+-- OAuth app registrations (Google/Microsoft) — BYOC client ID/secret or
+-- built-in defaults, stored separately from per-account rows.
+CREATE TABLE IF NOT EXISTS oauth_apps (
+  provider TEXT PRIMARY KEY,       -- 'google' | 'microsoft'
+  clientId TEXT,
+  clientSecretEncrypted TEXT,
+  redirectUri TEXT,
+  updatedAt TEXT
+);
 `;
 
 class Database {
@@ -518,6 +576,147 @@ class Database {
     } catch (e) {
       return { ok: false, error: String(e.message || e) };
     }
+  }
+
+  // --- Email accounts (multi-account layer) ---
+
+  _rowToAccount(columns, values) {
+    const obj = {};
+    columns.forEach((col, i) => { obj[col] = values[i]; });
+    return obj;
+  }
+
+  addAccount(account) {
+    const id = account.id || `acct_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    const now = new Date().toISOString();
+    this.db.run(
+      `INSERT INTO email_accounts (id, email, provider, authType, displayName, signature,
+        imapHost, imapPort, smtpHost, smtpPort, credentialsEncrypted, status, lastError,
+        lastSyncUid, dailySendCount, dailySendDate, createdAt)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        id, account.email || '', account.provider || 'imap', account.authType || 'app_password',
+        account.displayName || '', account.signature || '',
+        account.imapHost || null, account.imapPort || null,
+        account.smtpHost || null, account.smtpPort || null,
+        account.credentialsEncrypted || '', account.status || 'unverified', account.lastError || '',
+        account.lastSyncUid || 0, account.dailySendCount || 0, account.dailySendDate || '', now,
+      ]
+    );
+    this.persist();
+    return { ok: true, id };
+  }
+
+  getAccounts() {
+    const result = this.db.exec('SELECT * FROM email_accounts ORDER BY createdAt ASC');
+    if (!result.length) return [];
+    const { columns, values } = result[0];
+    return values.map((row) => this._rowToAccount(columns, row));
+  }
+
+  getAccount(id) {
+    const result = this.db.exec('SELECT * FROM email_accounts WHERE id = ?', [id]);
+    if (!result.length || !result[0].values.length) return null;
+    return this._rowToAccount(result[0].columns, result[0].values[0]);
+  }
+
+  updateAccount(id, fields) {
+    const UPDATABLE = [
+      'email', 'provider', 'authType', 'displayName', 'signature',
+      'imapHost', 'imapPort', 'smtpHost', 'smtpPort', 'credentialsEncrypted',
+      'status', 'lastError', 'lastSyncUid', 'dailySendCount', 'dailySendDate',
+    ];
+    const sets = [];
+    const values = [];
+    for (const key of UPDATABLE) {
+      if (fields[key] === undefined) continue;
+      sets.push(`${key} = ?`);
+      values.push(fields[key]);
+    }
+    if (!sets.length) return { ok: false, error: 'No updatable fields provided' };
+    values.push(id);
+    this.db.run(`UPDATE email_accounts SET ${sets.join(', ')} WHERE id = ?`, values);
+    this.persist();
+    return { ok: true };
+  }
+
+  removeAccount(id) {
+    this.db.run('DELETE FROM email_accounts WHERE id = ?', [id]);
+    this.persist();
+    return { ok: true };
+  }
+
+  // --- Threads / Messages ---
+
+  upsertThread(thread) {
+    const existing = this.db.exec('SELECT id FROM threads WHERE id = ?', [thread.id]);
+    if (existing.length && existing[0].values.length) {
+      this.db.run('UPDATE threads SET subject = ?, lastMessageAt = ?, leadId = COALESCE(?, leadId) WHERE id = ?',
+        [thread.subject || '', thread.lastMessageAt || new Date().toISOString(), thread.leadId || null, thread.id]);
+    } else {
+      this.db.run('INSERT INTO threads (id, accountId, leadId, subject, lastMessageAt) VALUES (?,?,?,?,?)',
+        [thread.id, thread.accountId, thread.leadId || null, thread.subject || '', thread.lastMessageAt || new Date().toISOString()]);
+    }
+    this.persist();
+    return { ok: true, id: thread.id };
+  }
+
+  insertMessage(message) {
+    const id = message.id || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    this.db.run(
+      `INSERT INTO messages (id, threadId, accountId, leadId, direction, fromAddr, toAddr,
+        subject, bodyText, snippet, messageId, inReplyTo, uid, status, at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        id, message.threadId, message.accountId, message.leadId || null, message.direction,
+        message.fromAddr || '', message.toAddr || '', message.subject || '', message.bodyText || '',
+        message.snippet || '', message.messageId || '', message.inReplyTo || '', message.uid || null,
+        message.status || '', message.at || new Date().toISOString(),
+      ]
+    );
+    this.persist();
+    return { ok: true, id };
+  }
+
+  getThreadMessages(threadId) {
+    const result = this.db.exec('SELECT * FROM messages WHERE threadId = ? ORDER BY at ASC', [threadId]);
+    if (!result.length) return [];
+    const { columns, values } = result[0];
+    return values.map((row) => this._rowToAccount(columns, row));
+  }
+
+  getMessagesByLead(leadId) {
+    const result = this.db.exec('SELECT * FROM messages WHERE leadId = ? ORDER BY at ASC', [leadId]);
+    if (!result.length) return [];
+    const { columns, values } = result[0];
+    return values.map((row) => this._rowToAccount(columns, row));
+  }
+
+  // --- OAuth app registrations (BYOC or built-in) ---
+
+  getOAuthApp(provider) {
+    const result = this.db.exec('SELECT * FROM oauth_apps WHERE provider = ?', [provider]);
+    if (!result.length || !result[0].values.length) return null;
+    return this._rowToAccount(result[0].columns, result[0].values[0]);
+  }
+
+  setOAuthApp(provider, fields) {
+    const existing = this.getOAuthApp(provider);
+    const now = new Date().toISOString();
+    if (existing) {
+      this.db.run(
+        'UPDATE oauth_apps SET clientId = ?, clientSecretEncrypted = ?, redirectUri = ?, updatedAt = ? WHERE provider = ?',
+        [fields.clientId ?? existing.clientId, fields.clientSecretEncrypted ?? existing.clientSecretEncrypted,
+          fields.redirectUri ?? existing.redirectUri, now, provider]
+      );
+    } else {
+      this.db.run(
+        'INSERT INTO oauth_apps (provider, clientId, clientSecretEncrypted, redirectUri, updatedAt) VALUES (?,?,?,?,?)',
+        [provider, fields.clientId || '', fields.clientSecretEncrypted || '', fields.redirectUri || '', now]
+      );
+    }
+    this.persist();
+    return { ok: true };
   }
 
   close() {

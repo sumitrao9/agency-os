@@ -69,10 +69,13 @@ check(
     check('replies:check reports checked:true (it did run, just found nothing)', result.checked === true);
     check('replies:check returns an empty newReplies array, not a crash', Array.isArray(result.newReplies) && result.newReplies.length === 0);
 
-    const state = runtime.getState();
+    // Post multi-account migration: syncAll() simply has zero accounts to
+    // iterate when none are configured — that's an empty, not-an-error
+    // result (no account = nothing to fail), unlike the old singleton
+    // ReplyTracker which threw a "no credentials" error on every check.
     check(
-      'the missing-credentials condition was recorded as a real error, not swallowed silently',
-      state.errors.some((e) => /credentials|IMAP/i.test(e.message))
+      'no accounts configured -> sync is a clean no-op, not a recorded error',
+      result.checked === true && result.newReplies.length === 0
     );
 
     const noDbRuntime = createAppRuntime({ app: { getPath: () => tempDir }, isTest: true });

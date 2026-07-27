@@ -6,7 +6,11 @@ const { Database } = require('./database');
 const { createConnectorServer } = require('./connectorServer');
 const { applyRules } = require('./ruleEngine');
 const { renderTemplate, renderFollowUp } = require('./templates');
-const { createTransport, sendEmail, verifyCredentials } = require('./mailer');
+const { AccountManager } = require('./email/AccountManager');
+const { MailEngine } = require('./email/MailEngine');
+const { encryptSecret, decryptSecret } = require('./email/credentialStore');
+const { runGoogleOAuthFlow } = require('./email/oauth/googleOAuth');
+const { runOutlookOAuthFlow } = require('./email/oauth/outlookOAuth');
 const { runStartupHealthCheck } = require('./healthCheck');
 const { discoverEmail } = require('./emailDiscovery');
 const { runDeepScan, fetchBinary } = require('./deepScan');
@@ -21,7 +25,6 @@ const { decideAction } = require('./decisionEngine');
 const { buildProposal } = require('./recommendationEngine');
 const { generateAutoNote } = require('./autoNotes');
 const { captureScreenshot } = require('./screenshot');
-const { ReplyTracker } = require('./replyTracker');
 const { stringifyCsv } = require('./csv');
 
 const WORKFLOW_CSV_HEADERS = [
@@ -43,8 +46,8 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
     db: null,
     mainWindow: null,
     connectorServer: null,
-    mailTransport: null,
-    mailAccountEmail: null,
+    accountManager: null,
+    mailEngine: null,
     lastHealthCheck: null,
     lastReplyCheck: null,
     spoofConfig: { enabled: false, lat: null, lng: null },
@@ -182,7 +185,7 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
     }));
 
     const alerts = [];
-    if (!state.mailAccountEmail) {
+    if (!state.accountManager || state.accountManager.listAccounts().length === 0) {
       alerts.push({ id: 'alert-smtp', label: 'Email not configured — outreach sending is disabled', severity: 'warning' });
     }
     for (const err of state.errors.slice(-5).reverse()) {
@@ -501,7 +504,8 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
     if (!state.db) return { ok: false, error: 'Database not ready' };
     const settings = loadJsonFile(path.join(userDataDir, 'settings.json'), {});
     if (!settings.autoFollowUp) return { ok: true, skipped: true, reason: 'Auto follow-up disabled in Settings' };
-    if (!state.mailTransport) return { ok: true, skipped: true, reason: 'No SMTP credentials configured' };
+    const defaultAccount = state.accountManager && state.accountManager.listAccounts()[0];
+    if (!defaultAccount) return { ok: true, skipped: true, reason: 'No email account configured' };
 
     const now = Date.now();
     const candidates = state.db.getAllLeads().filter((l) => l.status === 'Sent' && l.email);
@@ -524,6 +528,7 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
 
       const rendered = renderFollowUp(nextStage, lead);
       const result = await handleIpcRequest('email:send', {
+        accountId: defaultAccount.id,
         to: lead.email, subject: rendered.subject, body: rendered.body,
         fromName: settings.email?.fromName || '', leadId: lead.id, followUpStage: nextStage,
       });
@@ -549,107 +554,27 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
     return saveJsonFile(spoofConfigPath, config);
   }
 
-  function loadCredentials() {
-    try {
-      if (!fs.existsSync(credentialsPath)) return null;
-      const parsed = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-      if (parsed.encrypted && require('electron').safeStorage.isEncryptionAvailable()) {
-        const appPassword = require('electron').safeStorage.decryptString(Buffer.from(parsed.appPassword, 'base64'));
-        return { email: parsed.email, appPassword };
-      }
-      if (!parsed.encrypted) {
-        return { email: parsed.email, appPassword: parsed.appPassword };
-      }
-      return null;
-    } catch (error) {
-      recordError(`Failed to load SMTP credentials: ${error.message || error}`);
-      return null;
-    }
-  }
-
-  function saveCredentials(email, appPassword) {
-    const electron = require('electron');
-    const canEncrypt = electron.safeStorage.isEncryptionAvailable();
-    const payload = canEncrypt
-      ? { encrypted: true, email, appPassword: electron.safeStorage.encryptString(appPassword).toString('base64') }
-      : { encrypted: false, email, appPassword };
-    fs.writeFileSync(credentialsPath, JSON.stringify(payload));
-    return canEncrypt;
-  }
-
-  async function restoreSavedCredentials() {
-    const savedCreds = loadCredentials();
-    if (!savedCreds || !savedCreds.email || !savedCreds.appPassword) return;
-    try {
-      const transport = createTransport(savedCreds);
-      const verify = await verifyCredentials(transport);
-      if (verify.ok) {
-        state.mailTransport = transport;
-        state.mailAccountEmail = savedCreds.email;
-      } else {
-        recordError(`Saved SMTP credentials failed verification: ${verify.error}`);
-      }
-    } catch (error) {
-      recordError(`Failed to restore SMTP credentials: ${error.message || error}`);
-    }
-  }
-
-  let replyTracker = null;
-  function getReplyTracker() {
-    if (!replyTracker) {
-      replyTracker = new ReplyTracker({
-        getCredentials: () => loadCredentials(),
-        onError: (message) => recordError(message),
-      });
-    }
-    return replyTracker;
+  // Resolves an OAuth app's client ID/secret: a user-supplied BYOC override
+  // stored in the oauth_apps table wins over the build-injected "developer
+  // mode" default (env var baked in at build time). Secret never leaves the
+  // main process.
+  function resolveOAuthAppCreds(provider) {
+    const stored = state.db && state.db.getOAuthApp(provider);
+    const envClientId = provider === 'google' ? process.env.GOOGLE_OAUTH_CLIENT_ID : process.env.MS_OAUTH_CLIENT_ID;
+    const envClientSecret = provider === 'google' ? process.env.GOOGLE_OAUTH_CLIENT_SECRET : process.env.MS_OAUTH_CLIENT_SECRET;
+    const clientId = (stored && stored.clientId) || envClientId || '';
+    const clientSecret = stored && stored.clientSecretEncrypted ? decryptSecret(stored.clientSecretEncrypted) : (envClientSecret || '');
+    return { clientId, clientSecret, source: stored && stored.clientId ? 'byoc' : 'built-in' };
   }
 
   async function checkReplies() {
-    if (!state.db) return { checked: false, newReplies: [] };
-
-    const leads = state.db.getAllLeads();
-    const addressToLead = new Map();
-    for (const lead of leads) {
-      if (!lead.email) continue;
-      const key = lead.email.toLowerCase().trim();
-      // A reply is only meaningful for a lead we've actually contacted —
-      // matching against every lead with an email would also "detect" a
-      // reply from someone who simply emailed in cold on their own.
-      if (REPLY_UPGRADE_FROM.has(lead.status) || lead.status === 'Replied') {
-        if (!addressToLead.has(key)) addressToLead.set(key, lead);
-      }
-    }
-
-    const found = await getReplyTracker().checkReplies(new Set(addressToLead.keys()));
+    if (!state.mailEngine) return { checked: false, newReplies: [] };
+    const result = await state.mailEngine.syncAll();
     state.lastReplyCheck = new Date().toISOString();
-
-    const newReplies = [];
-    for (const reply of found) {
-      const lead = addressToLead.get(reply.fromAddress);
-      if (!lead) continue;
-
-      const fields = {
-        customFields: {
-          ...(lead.customFields || {}),
-          lastReply: { snippet: reply.snippet, receivedAt: reply.receivedAt, subject: reply.subject },
-        },
-        history: [
-          ...(lead.history || []),
-          { at: reply.receivedAt, event: `Reply received: "${reply.snippet.slice(0, 80)}"` },
-        ],
-      };
-      if (REPLY_UPGRADE_FROM.has(lead.status)) fields.status = 'Replied';
-
-      state.db.updateLead(lead.id, fields);
-      advanceQueueStage(lead.id, 'replied');
-      newReplies.push({ leadId: lead.id, businessName: lead.businessName, snippet: reply.snippet, fromAddress: reply.fromAddress });
-      // Multiple leads could theoretically share one email address; once
-      // matched, don't match the same inbox message to a second lead too.
-      addressToLead.delete(reply.fromAddress);
+    for (const reply of result.newMessages || []) {
+      if (reply.leadId) advanceQueueStage(reply.leadId, 'replied');
     }
-
-    return { checked: true, newReplies };
+    return { checked: true, newReplies: result.newMessages || [] };
   }
 
   async function initialize() {
@@ -668,8 +593,17 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
       console.warn(`[Agency OS] Backup skipped: ${backupResult.error}`);
     }
 
-    await restoreSavedCredentials();
-    const health = runStartupHealthCheck(state.db, state.spoofConfig, !!state.mailTransport);
+    state.accountManager = new AccountManager({ db: state.db, onError: recordError });
+    state.mailEngine = new MailEngine({ accountManager: state.accountManager, db: state.db, onError: recordError });
+    // Migration: import the legacy single-account smtp-credentials.json as
+    // one email_accounts row on first run — old file left in place.
+    const migration = state.accountManager.migrateLegacyCredentialsIfNeeded(credentialsPath);
+    if (migration.migrated) {
+      console.log('[Agency OS] Migrated legacy SMTP credentials into email_accounts');
+      await state.accountManager.verifyAccount(migration.accountId);
+    }
+
+    const health = runStartupHealthCheck(state.db, state.spoofConfig, state.accountManager.listAccounts().length > 0);
     state.lastHealthCheck = health;
     console.log('[Agency OS] Startup health check:', health.ok ? 'OK' : 'ISSUES FOUND');
     health.results.forEach((result) => {
@@ -708,8 +642,8 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
       db: state.db,
       mainWindow: state.mainWindow,
       connectorServer: state.connectorServer,
-      mailTransport: state.mailTransport,
-      mailAccountEmail: state.mailAccountEmail,
+      accountManager: state.accountManager,
+      mailEngine: state.mailEngine,
       lastHealthCheck: state.lastHealthCheck,
       spoofConfig: state.spoofConfig,
       sendCount: state.sendCount,
@@ -798,72 +732,101 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
         return payload.map((lead) => applyRules(lead));
       case 'email:renderTemplate':
         return renderTemplate(payload.templateKey, payload.lead);
-      case 'email:saveCredentials': {
-        try {
-          const transport = createTransport({ email: payload.email, appPassword: payload.appPassword });
-          const result = await verifyCredentials(transport);
-          if (result.ok) {
-            state.mailTransport = transport;
-            state.mailAccountEmail = payload.email;
-            const encrypted = saveCredentials(payload.email, payload.appPassword);
-            return { ok: true, encrypted };
-          }
-          return result;
-        } catch (error) {
-          return { ok: false, error: String(error.message || error) };
-        }
-      }
-      case 'email:getAccountStatus':
-        return { configured: !!state.mailTransport, email: state.mailAccountEmail };
-      case 'email:send': {
-        if (!state.mailTransport) return { ok: false, error: 'No SMTP credentials saved yet — go to Settings first.' };
-        if (state.db) {
-          const blocked = state.db.isBlacklisted({ email: payload.to });
-          if (blocked) {
-            return { ok: false, error: `This address is on the do-not-contact list${blocked.reason ? ` (${blocked.reason})` : ''} — send refused.`, blacklisted: true };
-          }
-        }
-        loadSendCount();
-        if (state.sendCount.count >= SMTP_HARD_STOP_AT) {
-          return {
-            ok: false,
-            error: `Daily send limit reached (${state.sendCount.count}/${SMTP_HARD_STOP_AT}) — stopping well short of Gmail's raw cap to keep cold outreach volume in a safe range. Resets at midnight.`,
-            limitReached: true,
-          };
-        }
-        try {
-          const result = await sendEmail(state.mailTransport, payload);
-          if (result.ok) {
-            recordSend();
-            if (payload.leadId) {
-              advanceQueueStage(payload.leadId, 'sent');
-              // Single source of truth for "when was this lead last emailed"
-              // — both manual sends and the auto-follow-up job read this,
-              // so the two never disagree about timing.
-              const lead = state.db && state.db.getAllLeads().find((l) => l.id === payload.leadId);
-              if (lead) {
-                const label = payload.followUpStage ? `Auto follow-up (${payload.followUpStage}) sent` : 'Email sent';
-                state.db.updateLead(payload.leadId, {
-                  history: [...(lead.history || []), { at: new Date().toISOString(), event: label }],
-                  customFields: payload.followUpStage
-                    ? { ...(lead.customFields || {}), followUpStage: payload.followUpStage }
-                    : lead.customFields,
-                });
-              }
-            }
-            if (state.sendCount.count === SMTP_WARN_AT) {
-              result.warning = `You've sent ${state.sendCount.count} emails today. Approaching the safe daily limit for cold outreach — pace the rest, or resume tomorrow.`;
-            }
-          }
-          return result;
-        } catch (error) {
-          return { ok: false, error: String(error.message || error) };
-        }
-      }
       case 'email:renderFollowUp':
         return renderFollowUp(payload.stage, payload.lead);
+
+      // --- Account layer (replaces the old single-account
+      // saveCredentials/getAccountStatus pair) ---
+      case 'email:accounts:list':
+        return state.accountManager ? state.accountManager.listAccounts() : [];
+      case 'email:accounts:add': {
+        if (!state.accountManager) return { ok: false, error: 'Not ready' };
+        const addResult = state.accountManager.addAccount(payload);
+        if (addResult.ok) {
+          const verify = await state.accountManager.verifyAccount(addResult.id);
+          return { ...addResult, verified: verify.ok, error: verify.ok ? undefined : verify.error };
+        }
+        return addResult;
+      }
+      case 'email:accounts:remove':
+        return state.accountManager ? state.accountManager.removeAccount(payload) : { ok: false, error: 'Not ready' };
+      case 'email:accounts:verify':
+        return state.accountManager ? state.accountManager.verifyAccount(payload) : { ok: false, error: 'Not ready' };
+
+      // --- OAuth ---
+      case 'email:oauth:start': {
+        const provider = payload && payload.provider; // 'google' | 'microsoft'
+        const { clientId, clientSecret } = resolveOAuthAppCreds(provider);
+        const openConsentWindow = (url) => {
+          const { BrowserWindow } = require('electron');
+          const win = new BrowserWindow({ width: 500, height: 650, webPreferences: { nodeIntegration: false } });
+          win.loadURL(url);
+          return win;
+        };
+        try {
+          const flow = provider === 'google'
+            ? await runGoogleOAuthFlow({ clientId, clientSecret, openConsentWindow })
+            : await runOutlookOAuthFlow({ clientId, clientSecret, openConsentWindow });
+          if (!flow.ok) return flow;
+          const addResult = state.accountManager.addAccount({
+            provider: provider === 'google' ? 'gmail' : 'outlook',
+            authType: 'oauth',
+            email: flow.email,
+            refreshToken: flow.refreshToken,
+            clientId, clientSecret,
+            displayName: flow.email,
+          });
+          if (addResult.ok) await state.accountManager.verifyAccount(addResult.id);
+          return { ok: addResult.ok, accountId: addResult.id, error: addResult.error };
+        } catch (error) {
+          return { ok: false, error: String(error.message || error) };
+        }
+      }
+      case 'email:oauthApp:get':
+        return resolveOAuthAppCreds(payload && payload.provider);
+      case 'email:oauthApp:save': {
+        if (!state.db) return { ok: false, error: 'Database not ready' };
+        state.db.setOAuthApp(payload.provider, {
+          clientId: payload.clientId || '',
+          clientSecretEncrypted: payload.clientSecret ? encryptSecret(payload.clientSecret) : '',
+          redirectUri: payload.redirectUri || '',
+        });
+        return { ok: true };
+      }
+
+      case 'email:send': {
+        if (!state.mailEngine) return { ok: false, error: 'Email engine not ready' };
+        if (!payload || !payload.accountId) return { ok: false, error: 'accountId is required' };
+        try {
+          const result = await state.mailEngine.send(payload.accountId, payload);
+          if (result.ok && payload.leadId) {
+            advanceQueueStage(payload.leadId, 'sent');
+            // Single source of truth for "when was this lead last emailed"
+            // — both manual sends and the auto-follow-up job read this,
+            // so the two never disagree about timing.
+            const lead = state.db && state.db.getAllLeads().find((l) => l.id === payload.leadId);
+            if (lead) {
+              const label = payload.followUpStage ? `Auto follow-up (${payload.followUpStage}) sent` : 'Email sent';
+              state.db.updateLead(payload.leadId, {
+                history: [...(lead.history || []), { at: new Date().toISOString(), event: label }],
+                customFields: payload.followUpStage
+                  ? { ...(lead.customFields || {}), followUpStage: payload.followUpStage }
+                  : lead.customFields,
+              });
+            }
+          }
+          return result;
+        } catch (error) {
+          return { ok: false, error: String(error.message || error) };
+        }
+      }
+      case 'email:sync': {
+        if (!state.mailEngine) return { newMessages: [] };
+        if (payload && payload.accountId) return state.mailEngine.syncAccount(payload.accountId);
+        return state.mailEngine.syncAll();
+      }
       case 'email:getSendCount':
-        return { ...state.sendCount, warnAt: SMTP_WARN_AT, hardStopAt: SMTP_HARD_STOP_AT };
+        return state.mailEngine ? state.mailEngine.getSendCount(payload) : { count: 0, warnAt: SMTP_WARN_AT, hardStopAt: SMTP_HARD_STOP_AT };
       case 'automation:consoleAction':
         return applyAutomationConsoleAction(payload);
       case 'leads:get': {
