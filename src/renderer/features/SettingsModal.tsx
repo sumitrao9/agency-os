@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useUIStore } from '../stores/ui.store';
 import ipc from '../lib/ipc';
-import type { ThemeMode, SpacingMode } from '@shared/types';
+import type { ThemeMode, SpacingMode, EmailAccount } from '@shared/types';
 
 export default function SettingsModal() {
   const {
@@ -21,6 +21,16 @@ export default function SettingsModal() {
   const [webhookSaving, setWebhookSaving] = useState(false);
   const [launchAtStartup, setLaunchAtStartup] = useState(false);
 
+  // Integrations: OAuth apps (Google/Microsoft) + provider status.
+  const [googleClientId, setGoogleClientId] = useState('');
+  const [googleClientSecret, setGoogleClientSecret] = useState('');
+  const [googleSource, setGoogleSource] = useState<'built-in' | 'byoc'>('built-in');
+  const [msClientId, setMsClientId] = useState('');
+  const [msClientSecret, setMsClientSecret] = useState('');
+  const [msSource, setMsSource] = useState<'built-in' | 'byoc'>('built-in');
+  const [integrationsAccounts, setIntegrationsAccounts] = useState<EmailAccount[]>([]);
+  const [oauthStatus, setOauthStatus] = useState('');
+
   useEffect(() => {
     if (settingsOpen) {
       setLocalHue(accentHue);
@@ -29,8 +39,40 @@ export default function SettingsModal() {
       setLocalFontSize(fontSize);
       ipc.getAppSettings().then((s) => { setAutoFollowUp(!!s.autoFollowUp); setWebhookUrl(s.webhookUrl || ''); }).catch(() => {});
       ipc.getLaunchAtStartup().then(setLaunchAtStartup).catch(() => {});
+      ipc.getOAuthApp('google').then((a) => { setGoogleClientId(a.clientId || ''); setGoogleSource(a.source); }).catch(() => {});
+      ipc.getOAuthApp('microsoft').then((a) => { setMsClientId(a.clientId || ''); setMsSource(a.source); }).catch(() => {});
+      ipc.listEmailAccounts().then(setIntegrationsAccounts).catch(() => {});
     }
   }, [settingsOpen, accentHue, accentSaturation, accentLightness, fontSize]);
+
+  const handleSaveGoogleOAuth = async () => {
+    await ipc.saveOAuthApp('google', googleClientId.trim(), googleClientSecret.trim());
+    setGoogleClientSecret('');
+    const a = await ipc.getOAuthApp('google');
+    setGoogleSource(a.source);
+  };
+
+  const handleSaveMsOAuth = async () => {
+    await ipc.saveOAuthApp('microsoft', msClientId.trim(), msClientSecret.trim());
+    setMsClientSecret('');
+    const a = await ipc.getOAuthApp('microsoft');
+    setMsSource(a.source);
+  };
+
+  const handleSignIn = async (provider: 'google' | 'microsoft') => {
+    setOauthStatus(`Opening ${provider === 'google' ? 'Google' : 'Microsoft'} sign-in…`);
+    try {
+      const result = await ipc.startEmailOAuth(provider);
+      if (result.ok) {
+        setOauthStatus('✓ Account connected');
+        ipc.listEmailAccounts().then(setIntegrationsAccounts).catch(() => {});
+      } else {
+        setOauthStatus(`✗ ${result.error}`);
+      }
+    } catch (e) {
+      setOauthStatus(`✗ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   const handleToggleLaunchAtStartup = async () => {
     const next = !launchAtStartup;
@@ -203,6 +245,61 @@ export default function SettingsModal() {
             <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)', margin: '4px 0 0' }}>
               Empty by default. When set, every newly captured lead (scraper, browser extract, or import) is POSTed here as JSON the moment it's saved — feed it into Zapier/Make/n8n or any CRM's webhook intake with zero manual export.
             </p>
+          </div>
+
+          {/* Integrations */}
+          <div className="settings-section">
+            <h3>Integrations</h3>
+
+            <h4 style={{ margin: 'var(--space-2) 0 var(--space-1)' }}>Google OAuth</h4>
+            <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)', margin: '0 0 4px' }}>
+              Currently using {googleSource === 'byoc' ? 'your own Client ID/Secret' : "AgencyOS's built-in app (recommended)"}.
+            </p>
+            <div className="settings-row">
+              <label>Client ID</label>
+              <input type="text" value={googleClientId} onChange={(e) => setGoogleClientId(e.target.value)} placeholder="Leave blank to use built-in" style={{ flex: 1 }} />
+            </div>
+            <div className="settings-row">
+              <label>Client Secret</label>
+              <input type="password" value={googleClientSecret} onChange={(e) => setGoogleClientSecret(e.target.value)} placeholder="Leave blank to keep current" style={{ flex: 1 }} />
+            </div>
+            <div className="settings-row" style={{ gap: 'var(--space-2)' }}>
+              <button className="btn-secondary" onClick={handleSaveGoogleOAuth}>Save</button>
+              <button className="btn-primary" onClick={() => handleSignIn('google')}>Sign in with Google</button>
+            </div>
+
+            <h4 style={{ margin: 'var(--space-3) 0 var(--space-1)' }}>Microsoft OAuth</h4>
+            <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)', margin: '0 0 4px' }}>
+              Currently using {msSource === 'byoc' ? 'your own Client ID/Secret' : "AgencyOS's built-in app (recommended)"}.
+            </p>
+            <div className="settings-row">
+              <label>Client ID</label>
+              <input type="text" value={msClientId} onChange={(e) => setMsClientId(e.target.value)} placeholder="Leave blank to use built-in" style={{ flex: 1 }} />
+            </div>
+            <div className="settings-row">
+              <label>Client Secret</label>
+              <input type="password" value={msClientSecret} onChange={(e) => setMsClientSecret(e.target.value)} placeholder="Leave blank to keep current" style={{ flex: 1 }} />
+            </div>
+            <div className="settings-row" style={{ gap: 'var(--space-2)' }}>
+              <button className="btn-secondary" onClick={handleSaveMsOAuth}>Save</button>
+              <button className="btn-primary" onClick={() => handleSignIn('microsoft')}>Sign in with Microsoft</button>
+            </div>
+
+            {oauthStatus && <p style={{ fontSize: 'var(--font-size-xs)', margin: '4px 0' }}>{oauthStatus}</p>}
+
+            <h4 style={{ margin: 'var(--space-3) 0 var(--space-1)' }}>Provider Status</h4>
+            {integrationsAccounts.length === 0 ? (
+              <p style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>No email accounts connected yet — use the Email module or sign in above.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+                {integrationsAccounts.map((a) => (
+                  <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-size-xs)' }}>
+                    <span>{a.email} ({a.provider}/{a.authType})</span>
+                    <span style={{ color: a.status === 'ok' ? 'var(--green)' : a.status === 'error' ? 'var(--red)' : 'var(--text-tertiary)' }}>{a.status}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Spacing */}

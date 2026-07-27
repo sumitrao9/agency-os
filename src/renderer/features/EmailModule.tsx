@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import ipc from '../lib/ipc';
 import { useLeadsStore } from '../stores/leads.store';
 import { useUIStore } from '../stores/ui.store';
-import type { Lead } from '@shared/types';
+import type { Lead, EmailAccount } from '@shared/types';
 
 const TEMPLATE_KEYS = ['no-website', 'outdated-website', 'missing-contact', 'low-reviews', 'general'] as const;
 const FOLLOWUP_STAGES = ['nudge', 'breakup'] as const;
@@ -16,11 +16,17 @@ export default function EmailModule() {
   const [tab, setTab] = useState<EmailTab>('compose');
   const [checkingReplies, setCheckingReplies] = useState(false);
 
-  const [status, setStatus] = useState<{ configured: boolean; email?: string }>({ configured: false });
+  const [accounts, setAccounts] = useState<EmailAccount[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState('');
   const [email, setEmail] = useState('');
   const [appPassword, setAppPassword] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
   const [sendCount, setSendCount] = useState({ count: 0, warnAt: 0, hardStopAt: 0 });
+
+  const status = useMemo(() => {
+    const active = accounts.find((a) => a.id === selectedAccountId) || accounts[0];
+    return { configured: !!active && active.status !== 'error', email: active?.email };
+  }, [accounts, selectedAccountId]);
 
   // Compose state
   const [selectedLeadId, setSelectedLeadId] = useState('');
@@ -40,16 +46,20 @@ export default function EmailModule() {
 
   const loadStatus = useCallback(async () => {
     try {
-      const s = await ipc.getEmailAccountStatus();
-      setStatus(s);
-      if (s.email) setEmail(s.email);
-      setSendCount(await ipc.getSendCount());
+      const list = await ipc.listEmailAccounts();
+      setAccounts(list);
+      setSelectedAccountId((prev) => (prev && list.some((a) => a.id === prev)) ? prev : (list[0]?.id || ''));
     } catch {
-      // Status card falls back to "Not configured".
+      // Account list falls back to empty ("Not configured").
     }
   }, []);
 
   useEffect(() => { loadStatus(); refreshLeads(); }, [loadStatus, refreshLeads]);
+
+  useEffect(() => {
+    if (!selectedAccountId) { setSendCount({ count: 0, warnAt: 0, hardStopAt: 0 }); return; }
+    ipc.getSendCount(selectedAccountId).then(setSendCount).catch(() => {});
+  }, [selectedAccountId]);
 
   // One-click "Email" from the Leads panel jumps here pre-targeting that lead.
   useEffect(() => {
@@ -68,17 +78,18 @@ export default function EmailModule() {
     }
   }, [selectedLeadId, leadPriorityCache]);
 
-  const handleSaveCredentials = async () => {
+  const handleAddAccount = async () => {
     if (!email || !appPassword) {
       setSaveStatus('Enter both fields');
       return;
     }
     setSaveStatus('Verifying...');
     try {
-      const result = await ipc.saveEmailCredentials(email, appPassword);
+      const result = await ipc.addEmailAccount({ provider: 'gmail', authType: 'app_password', email, appPassword, displayName: email });
       if (result.ok) {
-        setSaveStatus(result.encrypted ? '✓ Saved (encrypted)' : '✓ Saved');
+        setSaveStatus(result.verified ? '✓ Added & verified' : `✓ Added (verify failed: ${result.error || 'unknown'})`);
         setAppPassword('');
+        setEmail('');
         loadStatus();
       } else {
         setSaveStatus(`✗ ${result.error}`);
@@ -86,6 +97,11 @@ export default function EmailModule() {
     } catch (e) {
       setSaveStatus(`✗ ${e instanceof Error ? e.message : String(e)}`);
     }
+  };
+
+  const handleRemoveAccount = async (id: string) => {
+    await ipc.removeEmailAccount(id);
+    loadStatus();
   };
 
   const handleRender = useCallback(async () => {
@@ -108,6 +124,10 @@ export default function EmailModule() {
   useEffect(() => { handleRender(); }, [handleRender]);
 
   const handleSend = async () => {
+    if (!selectedAccountId) {
+      addToast('Add an email account first.', 'warning');
+      return;
+    }
     if (!selectedLead?.email) {
       addToast('Pick a lead with an email address first.', 'warning');
       return;
@@ -118,7 +138,7 @@ export default function EmailModule() {
     }
     setSending(true);
     try {
-      const result = await ipc.sendEmail(selectedLead.email, subject, body, fromName, undefined, undefined, selectedLead.id);
+      const result = await ipc.sendEmail(selectedAccountId, selectedLead.email, subject, body, fromName, undefined, undefined, selectedLead.id);
       if (result.ok) {
         localStorage.setItem('from-name', fromName);
         addToast(`Sent to ${selectedLead.email}`, 'success');
@@ -126,7 +146,7 @@ export default function EmailModule() {
         // Reflect outreach in the pipeline immediately, then persist.
         updateLeadInStore(selectedLead.id, { status: 'Sent' });
         await ipc.updateLead(selectedLead.id, { status: 'Sent' });
-        setSendCount(await ipc.getSendCount());
+        setSendCount(await ipc.getSendCount(selectedAccountId));
       } else {
         addToast(result.error || 'Send failed', 'error', 8000);
       }
@@ -270,16 +290,38 @@ export default function EmailModule() {
 
       {tab === 'compose' && (
       <>
-      {/* Account Status */}
+      {/* Accounts */}
       <div className="dashboard-card">
-        <h4 style={{ marginBottom: 'var(--space-2)' }}>Account Status</h4>
-        <div style={{ color: status.configured ? 'var(--green)' : 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>
-          {status.configured ? `✓ Connected as ${status.email}` : 'Not configured'}
-        </div>
+        <h4 style={{ marginBottom: 'var(--space-2)' }}>Email Accounts</h4>
+        {accounts.length === 0 ? (
+          <div style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>Not configured — add an account below.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+            {accounts.map((a) => (
+              <div
+                key={a.id}
+                onClick={() => setSelectedAccountId(a.id)}
+                style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: 'var(--space-2)', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                  border: `1px solid ${a.id === selectedAccountId ? 'var(--accent-border)' : 'var(--border-glass)'}`,
+                }}
+              >
+                <div>
+                  <span style={{ color: a.status === 'ok' ? 'var(--green)' : a.status === 'error' ? 'var(--red)' : 'var(--text-tertiary)' }}>
+                    {a.status === 'ok' ? '✓' : a.status === 'error' ? '✗' : '·'}
+                  </span>{' '}
+                  {a.email} <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>({a.provider}/{a.authType})</span>
+                </div>
+                <button className="btn-icon" onClick={(e) => { e.stopPropagation(); handleRemoveAccount(a.id); }}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
         {status.configured && sendCount.hardStopAt > 0 && (
           <div style={{ marginTop: 'var(--space-2)' }}>
             <div style={{ fontSize: 'var(--font-size-xs)', color: nearLimit ? 'var(--yellow)' : 'var(--text-tertiary)', marginBottom: 'var(--space-1)' }}>
-              Daily sends: {sendCount.count}/{sendCount.hardStopAt}
+              Daily sends ({status.email}): {sendCount.count}/{sendCount.hardStopAt}
               {nearLimit ? ' — approaching the safe daily limit' : ''}
             </div>
             <div className="progress-bar">
@@ -380,24 +422,25 @@ export default function EmailModule() {
         </div>
       </div>
 
-      {/* Configuration */}
+      {/* Add account (App Password path; OAuth is Settings > Integrations) */}
       <div className="dashboard-card">
-        <h4 style={{ marginBottom: 'var(--space-3)' }}>SMTP Configuration</h4>
+        <h4 style={{ marginBottom: 'var(--space-3)' }}>Add Account (App Password)</h4>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           <div className="field-group">
-            <label>Gmail Address</label>
+            <label>Email Address</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@gmail.com" />
           </div>
           <div className="field-group">
             <label>App Password</label>
-            <input type="password" value={appPassword} onChange={(e) => setAppPassword(e.target.value)} placeholder="16-character app password" />
+            <input type="password" value={appPassword} onChange={(e) => setAppPassword(e.target.value)} placeholder="app-specific password" />
           </div>
           <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>
-            Use a Gmail App Password — not your regular password. Generate one at{' '}
-            <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">Google App Passwords</a>.
+            Use an app-specific password (Gmail: {' '}
+            <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">generate one here</a>
+            ) — not your regular password. For OAuth sign-in (recommended, no app password needed), see Settings &gt; Integrations.
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <button className="btn-primary" onClick={handleSaveCredentials}>Save &amp; Verify</button>
+            <button className="btn-primary" onClick={handleAddAccount}>Add &amp; Verify</button>
             {saveStatus && <span style={{ fontSize: 'var(--font-size-sm)' }}>{saveStatus}</span>}
           </div>
         </div>

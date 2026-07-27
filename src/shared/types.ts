@@ -72,12 +72,78 @@ export interface EmailCredentials {
   appPassword: string;
 }
 
+export type EmailProvider = 'gmail' | 'outlook' | 'imap';
+export type EmailAuthType = 'oauth' | 'app_password';
+export type EmailAccountStatusValue = 'ok' | 'error' | 'unverified';
+
+export interface EmailAccount {
+  id: string;
+  email: string;
+  provider: EmailProvider;
+  authType: EmailAuthType;
+  displayName?: string;
+  signature?: string;
+  imapHost?: string | null;
+  imapPort?: number | null;
+  smtpHost?: string | null;
+  smtpPort?: number | null;
+  status: EmailAccountStatusValue;
+  lastError?: string;
+  lastSyncUid?: number;
+  dailySendCount?: number;
+  dailySendDate?: string;
+  createdAt?: string;
+}
+
+export interface AddEmailAccountInput {
+  provider: EmailProvider;
+  authType: EmailAuthType;
+  email: string;
+  appPassword?: string;
+  displayName?: string;
+  imapHost?: string;
+  imapPort?: number;
+  smtpHost?: string;
+  smtpPort?: number;
+}
+
+export interface AddEmailAccountResult {
+  ok: boolean;
+  id?: string;
+  verified?: boolean;
+  error?: string;
+}
+
+export interface OAuthAppInfo {
+  clientId: string;
+  clientSecret?: string;
+  source: 'built-in' | 'byoc';
+}
+
+export interface EmailSendPayload {
+  accountId: string;
+  to: string;
+  subject: string;
+  body: string;
+  fromName?: string;
+  inReplyTo?: string;
+  references?: string;
+  leadId?: string;
+}
+
 export interface SendEmailResult {
   ok: boolean;
   error?: string;
   messageId?: string;
   warning?: string;
   limitReached?: boolean;
+  blacklisted?: boolean;
+}
+
+export interface EmailSyncResult {
+  ok: boolean;
+  newMessages?: Array<{ accountId: string; leadId: string | null; businessName?: string | null; fromAddr: string; subject: string; snippet: string; at: string }>;
+  error?: string;
 }
 
 export interface RenderedEmail {
