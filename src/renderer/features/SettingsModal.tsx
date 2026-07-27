@@ -257,11 +257,11 @@ export default function SettingsModal() {
             </p>
             <div className="settings-row">
               <label>Client ID</label>
-              <input type="text" value={googleClientId} onChange={(e) => setGoogleClientId(e.target.value)} placeholder="Leave blank to use built-in" style={{ flex: 1 }} />
+              <input type="text" value={googleClientId} onChange={(e) => setGoogleClientId(e.target.value)} placeholder="Leave blank to use built-in" style={{ flex: 1 }} autoComplete="off" name="google-oauth-client-id" />
             </div>
             <div className="settings-row">
               <label>Client Secret</label>
-              <input type="password" value={googleClientSecret} onChange={(e) => setGoogleClientSecret(e.target.value)} placeholder="Leave blank to keep current" style={{ flex: 1 }} />
+              <input type="password" value={googleClientSecret} onChange={(e) => setGoogleClientSecret(e.target.value)} placeholder="Leave blank to keep current" style={{ flex: 1 }} autoComplete="new-password" name="google-oauth-client-secret" />
             </div>
             <div className="settings-row" style={{ gap: 'var(--space-2)' }}>
               <button className="btn-secondary" onClick={handleSaveGoogleOAuth}>Save</button>
@@ -274,11 +274,11 @@ export default function SettingsModal() {
             </p>
             <div className="settings-row">
               <label>Client ID</label>
-              <input type="text" value={msClientId} onChange={(e) => setMsClientId(e.target.value)} placeholder="Leave blank to use built-in" style={{ flex: 1 }} />
+              <input type="text" value={msClientId} onChange={(e) => setMsClientId(e.target.value)} placeholder="Leave blank to use built-in" style={{ flex: 1 }} autoComplete="off" name="ms-oauth-client-id" />
             </div>
             <div className="settings-row">
               <label>Client Secret</label>
-              <input type="password" value={msClientSecret} onChange={(e) => setMsClientSecret(e.target.value)} placeholder="Leave blank to keep current" style={{ flex: 1 }} />
+              <input type="password" value={msClientSecret} onChange={(e) => setMsClientSecret(e.target.value)} placeholder="Leave blank to keep current" style={{ flex: 1 }} autoComplete="new-password" name="ms-oauth-client-secret" />
             </div>
             <div className="settings-row" style={{ gap: 'var(--space-2)' }}>
               <button className="btn-secondary" onClick={handleSaveMsOAuth}>Save</button>

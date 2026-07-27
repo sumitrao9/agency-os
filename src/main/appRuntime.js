@@ -757,11 +757,41 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
       case 'email:oauth:start': {
         const provider = payload && payload.provider; // 'google' | 'microsoft'
         const { clientId, clientSecret } = resolveOAuthAppCreds(provider);
+        // Google (and Microsoft) block OAuth consent screens rendered inside an
+        // embedded webview/BrowserWindow — they detect it as an insecure
+        // user-agent and refuse to complete sign-in. The loopback server this
+        // flow already runs works the same either way, so open the consent
+        // URL in a real browser instead. Chrome specifically, since that's
+        // the browser Google's own sign-in flow is most reliably tested
+        // against; fall back to the OS default browser if Chrome isn't found.
         const openConsentWindow = (url) => {
-          const { BrowserWindow } = require('electron');
-          const win = new BrowserWindow({ width: 500, height: 650, webPreferences: { nodeIntegration: false } });
-          win.loadURL(url);
-          return win;
+          const { execFile } = require('node:child_process');
+          const chromePaths = process.platform === 'win32'
+            ? [
+                `${process.env['ProgramFiles']}\\Google\\Chrome\\Application\\chrome.exe`,
+                `${process.env['ProgramFiles(x86)']}\\Google\\Chrome\\Application\\chrome.exe`,
+                `${process.env['LOCALAPPDATA']}\\Google\\Chrome\\Application\\chrome.exe`,
+              ]
+            : process.platform === 'darwin'
+              ? ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+              : ['google-chrome', 'google-chrome-stable', 'chromium-browser'];
+
+          const fs = require('node:fs');
+          const foundPath = chromePaths.find((p) => {
+            try { return p.includes('/') === false || fs.existsSync(p); } catch { return false; }
+          });
+
+          if (foundPath) {
+            execFile(foundPath, [url], (err) => {
+              if (err) {
+                recordError(`Chrome launch failed, falling back to default browser: ${err.message}`);
+                require('electron').shell.openExternal(url);
+              }
+            });
+          } else {
+            require('electron').shell.openExternal(url);
+          }
+          return null;
         };
         try {
           const flow = provider === 'google'
