@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import ipc from '../lib/ipc';
 import type { AutomationConsoleState } from '@shared/types';
+import { PageHeader, Card, StatTile } from '../components/ui';
 
 export default function AutomationsModule() {
   const [consoleState, setConsoleState] = useState<AutomationConsoleState>({
@@ -31,18 +32,20 @@ export default function AutomationsModule() {
 
   return (
     <div className="automations-module" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-      <div className="module-header">
-        <div className="module-header-info">
-          <h2>Automations</h2>
-          <p>Monitor and control your automation workflows</p>
-        </div>
-        <div className="module-header-actions">
-          <button className="btn-secondary" onClick={loadState}>↻ Refresh</button>
-        </div>
+      <PageHeader
+        title="Automations"
+        description="Monitor and control your automation workflows"
+        actions={<button className="btn-secondary" onClick={loadState}>↻ Refresh</button>}
+      />
+
+      <div className="kpi-grid">
+        <StatTile accent="blue" label="Active Jobs" value={consoleState.jobs.length} />
+        <StatTile accent="purple" label="Queued" value={consoleState.queue.length} />
+        <StatTile accent={consoleState.alerts.length > 0 ? 'orange' : 'green'} label="Alerts" value={consoleState.alerts.length} />
       </div>
 
       {/* Active Jobs */}
-      <div className="dashboard-card">
+      <Card>
         <h4 style={{ marginBottom: 'var(--space-3)' }}>Active Jobs</h4>
         {consoleState.jobs.length === 0 ? (
           <div style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No active jobs</div>
@@ -74,10 +77,10 @@ export default function AutomationsModule() {
             ))}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Queue */}
-      <div className="dashboard-card">
+      <Card>
         <h4 style={{ marginBottom: 'var(--space-3)' }}>Queue</h4>
         {consoleState.queue.length === 0 ? (
           <div style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>Queue is empty</div>
@@ -94,10 +97,10 @@ export default function AutomationsModule() {
             ))}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Alerts */}
-      <div className="dashboard-card">
+      <Card>
         <h4 style={{ marginBottom: 'var(--space-3)' }}>Alerts</h4>
         {consoleState.alerts.length === 0 ? (
           <div style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No alerts</div>
@@ -110,7 +113,7 @@ export default function AutomationsModule() {
             ))}
           </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

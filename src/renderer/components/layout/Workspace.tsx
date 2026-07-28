@@ -1,4 +1,5 @@
 import { useUIStore } from '../../stores/ui.store';
+import HomeModule from '../../features/home/HomeModule';
 import DashboardModule from '../../features/dashboard/DashboardModule';
 import LeadsModule from '../../features/leads/LeadsModule';
 import BrowserModule from '../../features/BrowserModule';
@@ -15,6 +16,8 @@ export default function Workspace() {
 
   const renderModule = () => {
     switch (activeModule) {
+      case 'home':
+        return <HomeModule />;
       case 'dashboard':
         return <DashboardModule />;
       case 'leads':

@@ -2,7 +2,14 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import ipc from '../lib/ipc';
 import { useLeadsStore } from '../stores/leads.store';
 import { useUIStore } from '../stores/ui.store';
-import type { Lead, EmailAccount } from '@shared/types';
+import type { Lead, EmailAccount, EmailThread, EmailMessage, EmailFolder } from '@shared/types';
+
+const FOLDERS: { key: EmailFolder; label: string; icon: string }[] = [
+  { key: 'inbox', label: 'Inbox', icon: '📥' },
+  { key: 'archive', label: 'Archive', icon: '🗄' },
+  { key: 'spam', label: 'Spam', icon: '⚠' },
+  { key: 'trash', label: 'Trash', icon: '🗑' },
+];
 
 const TEMPLATE_KEYS = ['no-website', 'outdated-website', 'missing-contact', 'low-reviews', 'general'] as const;
 const FOLLOWUP_STAGES = ['nudge', 'breakup'] as const;
@@ -57,6 +64,17 @@ export default function EmailModule() {
 
   useEffect(() => { loadStatus(); refreshLeads(); }, [loadStatus, refreshLeads]);
 
+  // This component fetches its own account list once on mount, so an
+  // account added/signed-in from Settings (a separate, independently-mounted
+  // component) would otherwise never be reflected here until a full app
+  // reload — the "Send is disabled, says Not configured, even though I just
+  // signed in" bug. Settings broadcasts this event after any account change.
+  useEffect(() => {
+    const onAccountsChanged = () => loadStatus();
+    window.addEventListener('agencyos:accounts-changed', onAccountsChanged);
+    return () => window.removeEventListener('agencyos:accounts-changed', onAccountsChanged);
+  }, [loadStatus]);
+
   useEffect(() => {
     if (!selectedAccountId) { setSendCount({ count: 0, warnAt: 0, hardStopAt: 0 }); return; }
     ipc.getSendCount(selectedAccountId).then(setSendCount).catch(() => {});
@@ -94,6 +112,7 @@ export default function EmailModule() {
         setAppPassword('');
         setEmail('');
         loadStatus();
+        window.dispatchEvent(new CustomEvent('agencyos:accounts-changed'));
       } else {
         setSaveStatus(`✗ ${result.error}`);
       }
@@ -175,6 +194,7 @@ export default function EmailModule() {
       } else {
         addToast('No new replies', 'info');
       }
+      loadThreads();
     } catch (e) {
       addToast(`Reply check failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
     } finally {
@@ -182,19 +202,77 @@ export default function EmailModule() {
     }
   };
 
-  const inboxLeads = useMemo(
-    () => leads
-      .filter((l) => l.customFields?.lastReply)
-      .sort((a, b) => new Date((b.customFields!.lastReply as LastReply).receivedAt).getTime() - new Date((a.customFields!.lastReply as LastReply).receivedAt).getTime()),
-    [leads]
-  );
+  // --- Real inbox: threads/messages backed by the threads/messages tables ---
+  const [folder, setFolder] = useState<EmailFolder>('inbox');
+  const [threads, setThreads] = useState<EmailThread[]>([]);
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [selectedThreadId, setSelectedThreadId] = useState('');
+  const [threadMessages, setThreadMessages] = useState<EmailMessage[]>([]);
 
-  const handleReplyTo = (lead: Lead) => {
-    const reply = lead.customFields?.lastReply as LastReply | undefined;
-    setSelectedLeadId(lead.id);
+  const loadThreads = useCallback(async () => {
+    setThreadsLoading(true);
+    try {
+      const list = await ipc.listThreads({ folder, search: searchQuery.trim() || undefined });
+      setThreads(list);
+    } catch {
+      setThreads([]);
+    } finally {
+      setThreadsLoading(false);
+    }
+  }, [folder, searchQuery]);
+
+  useEffect(() => { if (tab === 'inbox') loadThreads(); }, [tab, loadThreads]);
+
+  const displayedThreads = useMemo(() => {
+    let list = unreadOnly ? threads.filter((t) => t.unreadCount > 0) : threads;
+    list = [...list].sort((a, b) => {
+      const diff = new Date(b.lastMessageAt).getTime() - new Date(a.lastMessageAt).getTime();
+      return sortOrder === 'newest' ? diff : -diff;
+    });
+    return list;
+  }, [threads, unreadOnly, sortOrder]);
+
+  const selectedThread = useMemo(() => threads.find((t) => t.threadId === selectedThreadId) || null, [threads, selectedThreadId]);
+
+  const openThread = useCallback(async (t: EmailThread) => {
+    setSelectedThreadId(t.threadId);
+    try {
+      const msgs = await ipc.getThreadMessages(t.threadId);
+      setThreadMessages(msgs);
+    } catch {
+      setThreadMessages([]);
+    }
+    if (t.unreadCount > 0) {
+      await ipc.markThreadRead(t.threadId, true);
+      setThreads((prev) => prev.map((x) => x.threadId === t.threadId ? { ...x, unreadCount: 0, isRead: 1 } : x));
+    }
+  }, []);
+
+  const handleStarThread = async (t: EmailThread, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = !t.isStarred;
+    await ipc.starMessage(t.lastMsgId, next);
+    setThreads((prev) => prev.map((x) => x.threadId === t.threadId ? { ...x, isStarred: next ? 1 : 0 } : x));
+  };
+
+  const handleMoveThread = async (t: EmailThread, targetFolder: EmailFolder, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await ipc.moveThread(t.threadId, targetFolder);
+    setThreads((prev) => prev.filter((x) => x.threadId !== t.threadId));
+    if (selectedThreadId === t.threadId) { setSelectedThreadId(''); setThreadMessages([]); }
+    addToast(targetFolder === 'trash' ? 'Moved to Trash' : targetFolder === 'archive' ? 'Archived' : `Moved to ${targetFolder}`, 'success');
+  };
+
+  const handleReplyToThread = () => {
+    if (!selectedThread) return;
+    const lead = selectedThread.leadId ? leads.find((l) => l.id === selectedThread.leadId) : null;
+    if (lead) setSelectedLeadId(lead.id);
     setFollowUpStage('');
     setTemplateKey('general');
-    setSubject(reply?.subject ? (reply.subject.startsWith('Re:') ? reply.subject : `Re: ${reply.subject}`) : `Re: ${lead.businessName}`);
+    setSubject(selectedThread.subject?.startsWith('Re:') ? selectedThread.subject : `Re: ${selectedThread.subject || ''}`);
     setBody('');
     setTab('compose');
   };
@@ -222,46 +300,131 @@ export default function EmailModule() {
               onClick={() => setTab(t)}
               style={tab === t ? { borderColor: 'var(--accent-border)', color: 'var(--accent)' } : undefined}
             >
-              {t === 'compose' ? '✉ Compose' : t === 'inbox' ? `📥 Inbox (${inboxLeads.length})` : '📊 Analytics'}
+              {t === 'compose' ? '✉ Compose' : t === 'inbox' ? `📥 Inbox${threads.some((x) => x.unreadCount > 0) ? ` (${threads.reduce((n, x) => n + (x.unreadCount > 0 ? 1 : 0), 0)})` : ''}` : '📊 Analytics'}
             </button>
           ))}
         </div>
       </div>
 
       {tab === 'inbox' && (
-        <div className="dashboard-card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-3)' }}>
-            <h4>Replies</h4>
-            <button className="btn-secondary" onClick={handleCheckReplies} disabled={checkingReplies}>
-              {checkingReplies ? '⟳ Checking…' : '↻ Check Replies'}
-            </button>
+        <div className="dashboard-card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-3)', borderBottom: '1px solid var(--border-glass)', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+              {FOLDERS.map((f) => (
+                <button
+                  key={f.key}
+                  className="btn-secondary"
+                  onClick={() => { setFolder(f.key); setSelectedThreadId(''); setThreadMessages([]); }}
+                  style={folder === f.key ? { borderColor: 'var(--accent-border)', color: 'var(--accent)' } : undefined}
+                >
+                  {f.icon} {f.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flex: 1, minWidth: 220, maxWidth: 420 }}>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search subject, sender…"
+                style={{ flex: 1 }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>
+                <input type="checkbox" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} /> Unread only
+              </label>
+              <select
+                value={sortOrder}
+                onChange={(e) => setSortOrder(e.target.value as 'newest' | 'oldest')}
+                style={{ height: 28, borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--bg-elevated)', color: 'var(--text-primary)', padding: '0 var(--space-2)' }}
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+              </select>
+              <button className="btn-secondary" onClick={handleCheckReplies} disabled={checkingReplies}>
+                {checkingReplies ? '⟳' : '↻'}
+              </button>
+            </div>
           </div>
-          {inboxLeads.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">📭</div>
-              <div className="empty-title">No replies yet</div>
-              <div className="empty-desc">Replies detected via IMAP polling (or "Check Replies") will show up here.</div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-              {inboxLeads.map((lead) => {
-                const reply = lead.customFields!.lastReply as LastReply;
-                return (
-                  <div key={lead.id} className="activity-item" style={{ padding: 'var(--space-2)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-md)', cursor: 'default' }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <strong>{lead.businessName}</strong>
-                        <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>{new Date(reply.receivedAt).toLocaleString()}</span>
+
+          <div style={{ display: 'flex', minHeight: 420 }}>
+            {/* Thread list */}
+            <div style={{ width: 360, borderRight: '1px solid var(--border-glass)', overflowY: 'auto', maxHeight: 560 }}>
+              {threadsLoading ? (
+                <div style={{ padding: 'var(--space-3)', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>Loading…</div>
+              ) : displayedThreads.length === 0 ? (
+                <div className="empty-state" style={{ padding: 'var(--space-4)' }}>
+                  <div className="empty-icon">📭</div>
+                  <div className="empty-title">No emails here</div>
+                  <div className="empty-desc">{folder === 'inbox' ? 'Replies detected via sync (or "↻") will show up here.' : `Nothing in ${folder}.`}</div>
+                </div>
+              ) : (
+                displayedThreads.map((t) => {
+                  const lead = t.leadId ? leads.find((l) => l.id === t.leadId) : null;
+                  const unread = t.unreadCount > 0;
+                  return (
+                    <div
+                      key={t.threadId}
+                      onClick={() => openThread(t)}
+                      style={{
+                        padding: 'var(--space-2) var(--space-3)', cursor: 'pointer',
+                        borderBottom: '1px solid var(--border-glass)',
+                        background: selectedThreadId === t.threadId ? 'var(--bg-elevated)' : 'transparent',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-2)' }}>
+                        <strong style={{ fontWeight: unread ? 700 : 500, fontSize: 'var(--font-size-sm)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {lead?.businessName || (t.direction === 'outbound' ? t.toAddr : t.fromAddr)}
+                        </strong>
+                        <span style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)', flexShrink: 0 }}>{new Date(t.lastMessageAt).toLocaleDateString()}</span>
                       </div>
-                      <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>{reply.subject}</div>
-                      <div style={{ fontSize: 'var(--font-size-sm)', margin: '4px 0' }}>{reply.snippet}</div>
-                      <button className="btn-secondary" onClick={() => handleReplyTo(lead)}>↩ Reply</button>
+                      <div style={{ fontSize: 'var(--font-size-xs)', color: unread ? 'var(--text-primary)' : 'var(--text-tertiary)', fontWeight: unread ? 600 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {t.subject || '(no subject)'}
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-2)' }}>
+                        <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.snippet}</div>
+                        <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+                          <button className="btn-icon" title="Star" onClick={(e) => handleStarThread(t, e)} style={{ color: t.isStarred ? 'var(--yellow)' : 'var(--text-tertiary)' }}>{t.isStarred ? '★' : '☆'}</button>
+                          {folder !== 'archive' && <button className="btn-icon" title="Archive" onClick={(e) => handleMoveThread(t, 'archive', e)}>🗄</button>}
+                          {folder !== 'spam' && <button className="btn-icon" title="Spam" onClick={(e) => handleMoveThread(t, 'spam', e)}>⚠</button>}
+                          {folder !== 'trash' && <button className="btn-icon" title="Trash" onClick={(e) => handleMoveThread(t, 'trash', e)}>🗑</button>}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
-          )}
+
+            {/* Message view */}
+            <div style={{ flex: 1, padding: 'var(--space-3)', overflowY: 'auto', maxHeight: 560 }}>
+              {!selectedThread ? (
+                <div className="empty-state" style={{ padding: 'var(--space-4)' }}>
+                  <div className="empty-icon">✉️</div>
+                  <div className="empty-title">Select an email</div>
+                </div>
+              ) : (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-3)' }}>
+                    <h4 style={{ margin: 0 }}>{selectedThread.subject || '(no subject)'}</h4>
+                    <button className="btn-primary" onClick={handleReplyToThread}>↩ Reply</button>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                    {threadMessages.map((m) => (
+                      <div key={m.id} style={{ padding: 'var(--space-3)', border: '1px solid var(--border-glass)', borderRadius: 'var(--radius-md)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--space-2)', fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>
+                          <span>{m.direction === 'outbound' ? `To: ${m.toAddr}` : `From: ${m.fromAddr}`}</span>
+                          <span>{new Date(m.at).toLocaleString()}</span>
+                        </div>
+                        <div style={{ fontSize: 'var(--font-size-sm)', whiteSpace: 'pre-wrap' }}>{m.bodyText || m.snippet}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

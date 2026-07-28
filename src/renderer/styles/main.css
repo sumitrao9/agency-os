@@ -6,20 +6,9 @@
 
 /* ============================================================
    Base Styles
+   Base resets (box-sizing, typography, buttons, inputs, scrollbar,
+   selection) live in globals.css's @layer base — not duplicated here.
    ============================================================ */
-*, *::before, *::after { box-sizing: border-box; }
-
-html, body {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  font-family: var(--font-family);
-  font-size: var(--font-size-base);
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-}
 
 /* Must match globals.css's body rule exactly — this file is imported after
    globals.css (see main.tsx), so on a shared selector like `body` this is
@@ -35,66 +24,6 @@ body {
     var(--bg);
   color: var(--text-primary);
   overflow: hidden;
-}
-
-/* Scrollbar styling */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--scrollbar-bg); }
-::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: var(--radius-full);
-}
-::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
-
-::selection {
-  background: var(--accent);
-  color: var(--text-inverse);
-}
-
-/* --- Typography --- */
-h1, h2, h3, h4, h5, h6 {
-  margin: 0;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-/* --- Base Elements --- */
-button {
-  font: inherit;
-  border: none;
-  cursor: pointer;
-  background: none;
-  color: inherit;
-  padding: 0;
-  transition: all var(--anim-normal);
-}
-
-button:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-input, select, textarea {
-  font: inherit;
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  transition: border-color var(--anim-fast);
-  outline: none;
-}
-
-input:focus, select:focus, textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-bg);
-}
-
-input::placeholder, textarea::placeholder {
-  color: var(--text-tertiary);
 }
 
 /* ============================================================
@@ -208,9 +137,18 @@ input::placeholder, textarea::placeholder {
   color: var(--text-primary);
 }
 
+.nav-item {
+  border: 1px solid transparent;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+}
+
 .nav-item.active {
   background: var(--accent-bg);
   color: var(--accent);
+  border-color: var(--accent-border);
+  box-shadow: var(--accent-glow);
 }
 
 .nav-item .nav-icon {
@@ -475,7 +413,8 @@ input::placeholder, textarea::placeholder {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: var(--space-4);
   gap: var(--space-4);
 }
@@ -1721,20 +1660,6 @@ input::placeholder, textarea::placeholder {
 /* ============================================================
    Settings Panel (macOS System Settings inspired)
    ============================================================ */
-.settings-panel {
-  display: flex;
-  height: 100%;
-  overflow: hidden;
-}
-
-.settings-sidebar {
-  width: 220px;
-  min-width: 220px;
-  border-right: 1px solid var(--border);
-  padding: var(--space-2);
-  overflow-y: auto;
-}
-
 .settings-content {
   flex: 1;
   padding: var(--space-6);

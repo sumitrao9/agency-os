@@ -66,6 +66,11 @@ export default function SettingsModal() {
       if (result.ok) {
         setOauthStatus('✓ Account connected');
         ipc.listEmailAccounts().then(setIntegrationsAccounts).catch(() => {});
+        // EmailModule fetches its own account list once on mount and has no
+        // way to know a new account just got added from here — broadcast so
+        // it (and anything else showing account status) can refetch live
+        // instead of only picking this up on the next full app reload.
+        window.dispatchEvent(new CustomEvent('agencyos:accounts-changed'));
       } else {
         setOauthStatus(`✗ ${result.error}`);
       }

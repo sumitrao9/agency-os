@@ -122,7 +122,11 @@ class MailEngine extends EventEmitter {
       fetchResult = await provider.fetchNew(account.lastSyncUid || 0);
     } catch (e) {
       const error = String(e.message || e);
-      this.db && this.db.updateAccount(accountId, { status: 'error', lastError: error });
+      // Deliberately does NOT touch account.status/lastError — those gate
+      // whether *sending* is enabled in the UI, and a transient inbox-sync
+      // failure (network blip, IMAP rate limit) has no bearing on whether
+      // SMTP send still works. Conflating the two meant one flaky sync
+      // silently disabled the Send button until a full app restart.
       this.onError(`Sync failed for ${account.email}: ${error}`);
       return { ok: false, error };
     }
@@ -177,7 +181,10 @@ class MailEngine extends EventEmitter {
     }
 
     if (this.db && highestUid > (account.lastSyncUid || 0)) {
-      this.db.updateAccount(accountId, { lastSyncUid: highestUid, status: 'ok', lastError: '' });
+      // Same reasoning as the catch block above: sync success/failure and
+      // send success/failure are independent signals, so this only ever
+      // touches lastSyncUid — never account.status/lastError.
+      this.db.updateAccount(accountId, { lastSyncUid: highestUid });
     }
 
     this.emit('account:status', { accountId, status: 'ok' });

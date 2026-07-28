@@ -17,6 +17,7 @@ export default function Topbar() {
   } = useUIStore();
 
   const moduleLabels: Record<string, string> = {
+    home: 'Home',
     dashboard: 'Dashboard',
     leads: 'Leads',
     browser: 'Browser',
@@ -28,6 +29,7 @@ export default function Topbar() {
     search: 'Search',
     settings: 'Settings',
     devtools: 'Dev Tools',
+    notifications: 'Notifications',
   };
 
   return (

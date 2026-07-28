@@ -137,7 +137,15 @@ class ImapSmtpProvider extends ProviderBase {
     // OAuth path (GmailProvider/OutlookProvider) passes an access token
     // instead of a password — imapflow's XOAUTH2 SASL mechanism.
     const auth = accessToken ? { user: email, accessToken } : { user: email, pass: password };
-    return { host, port, secure: true, auth, logger: false };
+    // imapflow's own defaults (16s greeting / 5min socket) mean a bad
+    // account (IMAP not enabled, stale/wrong-scope token, flaky network)
+    // hangs a sync for minutes with no feedback instead of failing fast —
+    // same reasoning as mailer.js's SMTP timeout tuning.
+    return {
+      host, port, secure: true, auth, logger: false,
+      greetingTimeout: CONNECT_TIMEOUT_MS,
+      socketTimeout: 30000,
+    };
   }
 
   async _connectImap() {

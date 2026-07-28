@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import ipc from '../lib/ipc';
 import { useLeadsStore } from '../stores/leads.store';
+import { PageHeader, Card, StatTile } from '../components/ui';
 
 export default function FilesModule() {
-  const { refreshLeads } = useLeadsStore();
+  const { refreshLeads, leads } = useLeadsStore();
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -36,21 +37,23 @@ export default function FilesModule() {
 
   return (
     <div className="files-module" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-      <div className="module-header">
-        <div className="module-header-info">
-          <h2>Files</h2>
-          <p>Export and manage your data files</p>
-        </div>
-        <div className="module-header-actions">
+      <PageHeader
+        title="Files"
+        description="Export and manage your data files"
+        actions={<>
           <button className="btn-primary" onClick={handleExport} disabled={busy}>Export CSV</button>
           <button className="btn-secondary" onClick={handleImport} disabled={busy}>Import</button>
-        </div>
+        </>}
+      />
+
+      <div className="kpi-grid">
+        <StatTile accent="blue" label="Total Leads" value={leads.length} sub="Available to export" />
       </div>
 
       {status && (
-        <div className="dashboard-card" style={{ fontSize: 'var(--font-size-sm)', color: status.startsWith('✗') ? 'var(--red)' : 'var(--text-secondary)' }}>
+        <Card style={{ fontSize: 'var(--font-size-sm)', color: status.startsWith('✗') ? 'var(--red)' : 'var(--text-secondary)' }}>
           {status}
-        </div>
+        </Card>
       )}
 
       <div className="empty-state">

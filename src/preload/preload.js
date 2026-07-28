@@ -59,6 +59,11 @@ const bridgeApi = {
   sendEmail: (accountId, to, subject, body, fromName, inReplyTo, references, leadId) =>
     ipcRenderer.invoke('email:send', { accountId, to, subject, body, fromName, inReplyTo, references, leadId }),
   syncEmail: (accountId) => ipcRenderer.invoke('email:sync', accountId ? { accountId } : undefined),
+  listThreads: (opts) => ipcRenderer.invoke('email:threads:list', opts),
+  getThreadMessages: (threadId) => ipcRenderer.invoke('email:threads:messages', threadId),
+  markThreadRead: (threadId, isRead) => ipcRenderer.invoke('email:threads:markRead', { threadId, isRead }),
+  starMessage: (messageId, isStarred) => ipcRenderer.invoke('email:threads:star', { messageId, isStarred }),
+  moveThread: (threadId, folder) => ipcRenderer.invoke('email:threads:move', { threadId, folder }),
   getHealth: () => ipcRenderer.invoke('health:get'),
   getAutomationConsoleState: () => ipcRenderer.invoke('automation:consoleState'),
   applyAutomationConsoleAction: (action) => ipcRenderer.invoke('automation:consoleAction', action),
@@ -107,6 +112,11 @@ const bridgeApi = {
     ipcRenderer.on('browser:downloadUpdate', listener);
     return () => ipcRenderer.removeListener('browser:downloadUpdate', listener);
   },
+  onBrowserContextResult: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('browser:contextResult', listener);
+    return () => ipcRenderer.removeListener('browser:contextResult', listener);
+  },
   getActionQueue: () => ipcRenderer.invoke('queue:list'),
   advanceQueueStage: (leadId, stage) => ipcRenderer.invoke('queue:advance', { leadId, stage }),
   generatePitch: (leadId) => ipcRenderer.invoke('queue:generatePitch', { leadId }),
@@ -121,6 +131,7 @@ const bridgeApi = {
   windowMaximize: () => ipcRenderer.send('window:maximize'),
   windowClose: () => ipcRenderer.send('window:close'),
   windowIsMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+  invalidateWebview: (webContentsId) => ipcRenderer.send('browser:invalidateView', webContentsId),
 };
 
 contextBridge.exposeInMainWorld('agencyOS', bridgeApi);

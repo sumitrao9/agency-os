@@ -1,18 +1,20 @@
 import { useUIStore } from '../stores/ui.store';
+import { PageHeader, Card, StatTile } from '../components/ui';
 
 export default function NotificationsModule() {
   const { toasts, removeToast } = useUIStore();
+  const errorCount = toasts.filter((t) => t.type === 'error').length;
 
   return (
     <div className="notifications-module" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-      <div className="module-header">
-        <div className="module-header-info">
-          <h2>Notifications</h2>
-          <p>System notifications and alerts</p>
-        </div>
+      <PageHeader title="Notifications" description="System notifications and alerts" />
+
+      <div className="kpi-grid">
+        <StatTile accent="blue" label="Total" value={toasts.length} />
+        <StatTile accent={errorCount > 0 ? 'orange' : 'green'} label="Errors" value={errorCount} />
       </div>
 
-      <div className="dashboard-card">
+      <Card>
         <h4 style={{ marginBottom: 'var(--space-3)' }}>Recent Notifications</h4>
         {toasts.length === 0 ? (
           <div style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>
@@ -45,7 +47,7 @@ export default function NotificationsModule() {
             ))}
           </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

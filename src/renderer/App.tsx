@@ -37,9 +37,9 @@ export default function App() {
   useEffect(() => {
     applyThemeSettings({
       mode: (localStorage.getItem('theme-mode') as ThemeMode) || 'dark',
-      accentHue: parseInt(localStorage.getItem('accent-h') || '140'),
+      accentHue: parseInt(localStorage.getItem('accent-h') || '211'),
       accentSaturation: parseInt(localStorage.getItem('accent-s') || '100'),
-      accentLightness: parseInt(localStorage.getItem('accent-l') || '70'),
+      accentLightness: parseInt(localStorage.getItem('accent-l') || '50'),
       fontSize: parseInt(localStorage.getItem('font-size') || '13'),
       spacing: (localStorage.getItem('spacing') as SpacingMode) || 'comfortable',
     });

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import {
-  LayoutDashboard, Users, Globe, Mail, Zap, Clock, SlidersHorizontal,
+  Home, LayoutDashboard, Users, Globe, Mail, Zap, Clock, SlidersHorizontal,
   Folder, Bell, Search, Settings, Terminal, type LucideIcon,
 } from 'lucide-react';
 import { useUIStore } from '../../stores/ui.store';
@@ -17,6 +17,7 @@ interface SidebarNavItem {
 // style apps) instead of the previous mix of Unicode glyphs + emoji, which
 // is exactly what read as "some icons match, some don't."
 const navItems: SidebarNavItem[] = [
+  { id: 'home', label: 'Home', icon: Home },
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'leads', label: 'Leads', icon: Users },
   { id: 'browser', label: 'Browser + Scraper', icon: Globe },
@@ -44,25 +45,6 @@ export default function Sidebar() {
     setActiveModule(item.id as ModuleName);
   };
 
-  const getBtnStyle = (isActive: boolean): React.CSSProperties => ({
-    display: 'flex',
-    alignItems: 'center',
-    gap: 'var(--space-2)',
-    padding: 'var(--space-1) var(--space-2)',
-    borderRadius: 'var(--radius-md)',
-    color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
-    fontSize: 'var(--font-size-sm)',
-    fontWeight: 500,
-    height: 34,
-    cursor: 'pointer',
-    border: isActive ? '1px solid var(--accent-border)' : '1px solid transparent',
-    background: isActive ? 'var(--accent-bg)' : 'transparent',
-    boxShadow: isActive ? 'var(--accent-glow)' : 'none',
-    transition: 'all var(--anim-fast)',
-    width: '100%',
-    textAlign: 'left',
-  });
-
   return (
     <aside className="sidebar" style={{
       width: sidebarCollapsed ? 52 : 240,
@@ -75,7 +57,7 @@ export default function Sidebar() {
       overflow: 'hidden',
     }}>
       {/* Brand */}
-      <div onClick={() => setActiveModule('dashboard')} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-1) var(--space-2)', marginBottom: 'var(--space-3)', cursor: 'pointer' }}>
+      <div onClick={() => setActiveModule('home')} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-1) var(--space-2)', marginBottom: 'var(--space-3)', cursor: 'pointer' }}>
         <div style={{ width: 28, height: 28, display: 'grid', placeItems: 'center', borderRadius: 'var(--radius-md)', background: 'linear-gradient(135deg, var(--accent), var(--cyan))', boxShadow: 'var(--accent-glow)', color: 'var(--text-inverse)', fontWeight: 700, fontSize: 'var(--font-size-sm)', flexShrink: 0 }}>A</div>
         {!sidebarCollapsed && <h1 style={{ fontSize: 'var(--font-size-md)', fontWeight: 600, color: 'var(--text-primary)', lineHeight: 1.3, margin: 0 }}>Agency OS</h1>}
       </div>
@@ -86,15 +68,15 @@ export default function Sidebar() {
           const Icon = item.icon;
           const isActive = activeModule === item.id;
           return (
-            <button key={item.id} onClick={() => handleNavClick(item)} style={getBtnStyle(isActive)} title={sidebarCollapsed ? item.label : undefined}>
-              <span style={{ width: 18, height: 18, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+            <button key={item.id} className={`nav-item${isActive ? ' active' : ''}`} onClick={() => handleNavClick(item)} title={sidebarCollapsed ? item.label : undefined}>
+              <span className="nav-icon">
                 <Icon size={17} strokeWidth={isActive ? 2.25 : 1.75} />
               </span>
               {!sidebarCollapsed && (
                 <>
                   <span style={{ flex: 1, minWidth: 0 }}>{item.label}</span>
                   {item.id === 'leads' && leadCount > 0 && (
-                    <span style={{ fontSize: 'var(--font-size-xs)', background: 'var(--bg-active)', padding: '1px 6px', borderRadius: 'var(--radius-full)', color: 'var(--text-secondary)', minWidth: 18, textAlign: 'center' }}>{leadCount}</span>
+                    <span className="nav-badge">{leadCount}</span>
                   )}
                 </>
               )}
@@ -114,8 +96,8 @@ export default function Sidebar() {
           // never carry the active state — only 'notifications'/'devtools' can.
           const isActive = activeModule === item.id;
           return (
-            <button key={item.id} onClick={() => handleNavClick(item)} style={getBtnStyle(isActive)} title={sidebarCollapsed ? item.label : undefined}>
-              <span style={{ width: 18, height: 18, display: 'grid', placeItems: 'center', flexShrink: 0 }}>
+            <button key={item.id} className={`nav-item${isActive ? ' active' : ''}`} onClick={() => handleNavClick(item)} title={sidebarCollapsed ? item.label : undefined}>
+              <span className="nav-icon">
                 <Icon size={17} strokeWidth={isActive ? 2.25 : 1.75} />
               </span>
               {!sidebarCollapsed && <span>{item.label}</span>}

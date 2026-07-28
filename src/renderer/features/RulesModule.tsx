@@ -1,5 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useLeadsStore } from '../stores/leads.store';
+import { PageHeader, Card, StatTile } from '../components/ui';
+
+const RULES = [
+  { id: 'website-missing', desc: 'No website detected', tag: 'No Website' },
+  { id: 'website-present', desc: 'Has a website', tag: 'Has Website' },
+  { id: 'phone-missing', desc: 'No phone number', tag: 'No Phone' },
+  { id: 'low-reviews', desc: 'Less than 20 reviews', tag: 'Low Reviews' },
+  { id: 'high-reviews', desc: '150+ reviews', tag: 'High Reviews' },
+  { id: 'no-email', desc: 'No email found', tag: 'No Email Found' },
+  { id: 'no-ssl', desc: 'Website missing SSL', tag: 'No SSL' },
+  { id: 'not-mobile-friendly', desc: 'Website not mobile-friendly', tag: 'Not Mobile-Friendly' },
+];
 
 export default function RulesModule() {
   const { leads, leadPriorityCache, refreshLeads } = useLeadsStore();
@@ -23,15 +35,20 @@ export default function RulesModule() {
 
   return (
     <div className="rules-module" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-      <div className="module-header">
-        <div className="module-header-info">
-          <h2>Rules Engine</h2>
-          <p>Deterministic lead scoring and priority assignment</p>
-        </div>
+      <PageHeader
+        title="Rules Engine"
+        description="Deterministic lead scoring and priority assignment"
+        actions={<span className="badge badge-accent" title="These rules are built into the scoring engine and can't be edited from the UI.">System-managed · Read-only</span>}
+      />
+
+      <div className="kpi-grid">
+        <StatTile accent="blue" label="Active Rules" value={RULES.length} />
+        <StatTile accent="green" label="Priority A" value={stats.a} sub="High opportunity" />
+        <StatTile accent="purple" label="Priority B" value={stats.b} sub="Moderate opportunity" />
       </div>
 
       {/* Priority Distribution */}
-      <div className="dashboard-card">
+      <Card>
         <h4 style={{ marginBottom: 'var(--space-3)' }}>Priority Distribution</h4>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-3)' }}>
           <div className="dashboard-stat">
@@ -50,29 +67,20 @@ export default function RulesModule() {
             <div className="stat-detail">Low priority</div>
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Rule Definitions */}
-      <div className="dashboard-card">
+      <Card>
         <h4 style={{ marginBottom: 'var(--space-3)' }}>Active Rules</h4>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-          {[
-            { id: 'website-missing', desc: 'No website detected', tag: 'No Website' },
-            { id: 'website-present', desc: 'Has a website', tag: 'Has Website' },
-            { id: 'phone-missing', desc: 'No phone number', tag: 'No Phone' },
-            { id: 'low-reviews', desc: 'Less than 20 reviews', tag: 'Low Reviews' },
-            { id: 'high-reviews', desc: '150+ reviews', tag: 'High Reviews' },
-            { id: 'no-email', desc: 'No email found', tag: 'No Email Found' },
-            { id: 'no-ssl', desc: 'Website missing SSL', tag: 'No SSL' },
-            { id: 'not-mobile-friendly', desc: 'Website not mobile-friendly', tag: 'Not Mobile-Friendly' },
-          ].map(rule => (
+          {RULES.map(rule => (
             <div key={rule.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-2)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-hover)' }}>
               <span className="tag">{rule.tag}</span>
               <span style={{ fontSize: 'var(--font-size-sm)', color: 'var(--text-secondary)' }}>{rule.desc}</span>
             </div>
           ))}
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

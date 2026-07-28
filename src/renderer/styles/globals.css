@@ -52,10 +52,10 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.36);
   --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.48);
 
-  /* Accent (user-customizable) — neon green default */
-  --accent-h: 140;
+  /* Accent (user-customizable) — macOS blue default */
+  --accent-h: 211;
   --accent-s: 100%;
-  --accent-l: 70%;
+  --accent-l: 50%;
   --accent: hsl(var(--accent-h), var(--accent-s), var(--accent-l));
   --accent-dim: hsl(var(--accent-h), var(--accent-s), calc(var(--accent-l) - 15%));
   --accent-bg: hsla(var(--accent-h), var(--accent-s), var(--accent-l), 0.1);
@@ -90,13 +90,13 @@
 
   --border: rgba(255, 255, 255, 0.08);
   --border-hover: rgba(255, 255, 255, 0.16);
-  --border-active: rgba(102, 255, 136, 0.4);
+  --border-active: rgba(79, 209, 255, 0.4);
 
   --surface-glass: rgba(255, 255, 255, 0.035);
   --border-glass: rgba(255, 255, 255, 0.08);
 
-  --green: #66ff88;
-  --green-bg: rgba(102, 255, 136, 0.1);
+  --green: #4fd1ff;
+  --green-bg: rgba(79, 209, 255, 0.1);
   --red: #ff5f57;
   --red-bg: rgba(255, 95, 87, 0.12);
   --yellow: #ffd60a;
@@ -120,10 +120,10 @@
      correct their own blur() rule is — the panels need vivid color behind
      them, not just under them. Raised intensity + bigger spread so glass
      depth is visible everywhere, not just on the Dashboard's KPI tiles. */
-  --grid-glow: radial-gradient(circle at 15% -10%, rgba(102, 255, 136, 0.22), transparent 45%),
+  --grid-glow: radial-gradient(circle at 15% -10%, rgba(10, 132, 255, 0.22), transparent 45%),
     radial-gradient(circle at 90% 5%, rgba(79, 209, 255, 0.18), transparent 42%),
     radial-gradient(circle at 75% 95%, rgba(139, 92, 246, 0.20), transparent 48%),
-    radial-gradient(circle at 5% 80%, rgba(102, 255, 136, 0.10), transparent 40%);
+    radial-gradient(circle at 5% 80%, rgba(10, 132, 255, 0.10), transparent 40%);
 
   color-scheme: dark;
 }
@@ -167,8 +167,8 @@
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.18);
 
   --grid-line: rgba(0, 0, 0, 0.03);
-  --grid-glow: radial-gradient(circle at 20% 0%, rgba(48, 209, 88, 0.05), transparent 40%),
-    radial-gradient(circle at 85% 15%, rgba(10, 132, 255, 0.04), transparent 40%);
+  --grid-glow: radial-gradient(circle at 20% 0%, rgba(10, 132, 255, 0.05), transparent 40%),
+    radial-gradient(circle at 85% 15%, rgba(139, 92, 246, 0.04), transparent 40%);
 
   color-scheme: light;
 }

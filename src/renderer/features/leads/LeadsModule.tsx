@@ -31,13 +31,14 @@ function loadSavedFilters(): SavedFilter[] {
 
 export default function LeadsModule() {
   const { leads, searchQuery, setSearchQuery, statusFilter, setStatusFilter, priorityFilter, setPriorityFilter, loading, refreshLeads, selectLead, selectedLeadId, updateLeadInStore } = useLeadsStore();
-  const { addToast, setActiveModule, setComposeLeadId } = useUIStore();
+  const { addToast, setActiveModule, setComposeLeadId, setBrowserNavUrl } = useUIStore();
   const selectedLead = leads.find(l => l.id === selectedLeadId) || null;
   const [notesDraft, setNotesDraft] = useState('');
   const [notesSaving, setNotesSaving] = useState(false);
   const [checkingReplies, setCheckingReplies] = useState(false);
   const [deepScanning, setDeepScanning] = useState(false);
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+  const [screenshotStatus, setScreenshotStatus] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [hideLowQuality, setHideLowQuality] = useState(false);
   const [minCloseProbability, setMinCloseProbability] = useState(0);
@@ -59,13 +60,26 @@ export default function LeadsModule() {
 
   useEffect(() => {
     setScreenshotUrl(null);
+    setScreenshotStatus('idle');
     const scan = selectedLead?.customFields?.deepScan as { screenshotPath?: string } | undefined;
     if (!selectedLead || !scan?.screenshotPath) return;
     let cancelled = false;
+    setScreenshotStatus('loading');
+    const timeout = setTimeout(() => {
+      if (!cancelled) setScreenshotStatus((s) => (s === 'loading' ? 'unavailable' : s));
+    }, 8000);
     ipc.getLeadScreenshot(selectedLead.id).then((r) => {
-      if (!cancelled && r.ok && r.dataUrl) setScreenshotUrl(r.dataUrl);
+      if (cancelled) return;
+      if (r.ok && r.dataUrl) {
+        setScreenshotUrl(r.dataUrl);
+        setScreenshotStatus('ready');
+      } else {
+        setScreenshotStatus('unavailable');
+      }
+    }).catch(() => {
+      if (!cancelled) setScreenshotStatus('unavailable');
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; clearTimeout(timeout); };
   }, [selectedLead?.id, selectedLead?.customFields?.deepScan]);
 
   const handleSelectLead = useCallback((id: string) => {
@@ -118,12 +132,12 @@ export default function LeadsModule() {
     setActiveModule('email');
   }, [selectedLead, setComposeLeadId, setActiveModule]);
 
-  const handleOpenWebsite = useCallback(async () => {
+  const handleOpenWebsite = useCallback(() => {
     if (!selectedLead?.website) return;
     const url = selectedLead.website.startsWith('http') ? selectedLead.website : `https://${selectedLead.website}`;
-    const result = await ipc.openExternal(url);
-    if (!result.ok) addToast(result.error || 'Could not open website', 'error');
-  }, [selectedLead, addToast]);
+    setBrowserNavUrl(url);
+    setActiveModule('browser');
+  }, [selectedLead, setBrowserNavUrl, setActiveModule]);
 
   const handleCopyContact = useCallback(async () => {
     if (!selectedLead) return;
@@ -132,12 +146,12 @@ export default function LeadsModule() {
     addToast('Contact copied', 'success');
   }, [selectedLead, addToast]);
 
-  const handleOpenMaps = useCallback(async () => {
+  const handleOpenMaps = useCallback(() => {
     if (!selectedLead) return;
     const url = selectedLead.googleMapsUrl || `https://www.google.com/maps/search/${encodeURIComponent(`${selectedLead.businessName} ${selectedLead.address || ''}`)}`;
-    const result = await ipc.openExternal(url);
-    if (!result.ok) addToast(result.error || 'Could not open Maps', 'error');
-  }, [selectedLead, addToast]);
+    setBrowserNavUrl(url);
+    setActiveModule('browser');
+  }, [selectedLead, setBrowserNavUrl, setActiveModule]);
 
   const handleAddToCampaign = useCallback(async () => {
     if (!selectedLead) return;
@@ -411,18 +425,20 @@ export default function LeadsModule() {
                 checked={selectedIds.has(lead.id)}
                 onToggleCheck={() => toggleSelected(lead.id)}
                 onEmail={() => { setComposeLeadId(lead.id); setActiveModule('email'); }}
-                onOpenWebsite={async () => {
+                onOpenWebsite={() => {
                   if (!lead.website) return;
                   const url = lead.website.startsWith('http') ? lead.website : `https://${lead.website}`;
-                  await ipc.openExternal(url);
+                  setBrowserNavUrl(url);
+                  setActiveModule('browser');
                 }}
                 onCopyContact={async () => {
                   await navigator.clipboard.writeText([lead.businessName, lead.email, lead.phone].filter(Boolean).join(' | '));
                   addToast('Contact copied', 'success');
                 }}
-                onOpenMaps={async () => {
+                onOpenMaps={() => {
                   const url = lead.googleMapsUrl || `https://www.google.com/maps/search/${encodeURIComponent(`${lead.businessName} ${lead.address || ''}`)}`;
-                  await ipc.openExternal(url);
+                  setBrowserNavUrl(url);
+                  setActiveModule('browser');
                 }}
                 onCopyColdEmail={async () => {
                   const ruled = useLeadsStore.getState().leadPriorityCache[lead.id]?.ruled;
@@ -432,7 +448,7 @@ export default function LeadsModule() {
                   await navigator.clipboard.writeText(`Subject: ${rendered.subject}\n\n${rendered.body}`);
                   addToast('Cold email copied — paste it into any mail client or DM', 'success');
                 }}
-                onOpenLinkedIn={async (url) => { await ipc.openExternal(url); }}
+                onOpenLinkedIn={(url) => { setBrowserNavUrl(url); setActiveModule('browser'); }}
               />
             ))}
             {filteredLeads.length === 0 && !loading && (
@@ -652,9 +668,18 @@ export default function LeadsModule() {
                   {!!scan.socialLinks?.length && <div><strong>Social:</strong> {scan.socialLinks.length} link(s)</div>}
                   {!!scan.dns?.mx?.length && <div><strong>MX:</strong> {scan.dns.mx.join(', ')}</div>}
                   {scan.screenshotPath && (
-                    screenshotUrl
-                      ? <img src={screenshotUrl} alt="Website screenshot" style={{ width: '100%', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-glass)', marginTop: 4 }} />
-                      : <div style={{ color: 'var(--text-tertiary)' }}>Loading screenshot…</div>
+                    screenshotStatus === 'ready' && screenshotUrl
+                      ? (
+                        <img
+                          src={screenshotUrl}
+                          alt="Website screenshot"
+                          style={{ width: '100%', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-glass)', marginTop: 4 }}
+                          onError={() => setScreenshotStatus('unavailable')}
+                        />
+                      )
+                      : screenshotStatus === 'unavailable'
+                        ? <div style={{ color: 'var(--text-tertiary)' }}>Screenshot unavailable</div>
+                        : <div style={{ color: 'var(--text-tertiary)' }}>Loading screenshot…</div>
                   )}
                 </div>
               );

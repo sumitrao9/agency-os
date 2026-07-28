@@ -151,6 +151,61 @@ export interface RenderedEmail {
   body: string;
 }
 
+export interface EmailThread {
+  threadId: string;
+  accountId: string;
+  leadId: string | null;
+  subject: string;
+  lastMessageAt: string;
+  lastMsgId: string;
+  fromAddr: string;
+  toAddr: string;
+  snippet: string;
+  direction: 'inbound' | 'outbound';
+  isRead: number;
+  isStarred: number;
+  folder: 'inbox' | 'archive' | 'trash' | 'spam';
+  unreadCount: number;
+}
+
+export interface EmailMessage {
+  id: string;
+  threadId: string;
+  accountId: string;
+  leadId: string | null;
+  direction: 'inbound' | 'outbound';
+  fromAddr: string;
+  toAddr: string;
+  subject: string;
+  bodyText: string;
+  snippet: string;
+  messageId: string;
+  inReplyTo: string;
+  uid: number | null;
+  status: string;
+  at: string;
+  isRead: number;
+  isStarred: number;
+  folder: 'inbox' | 'archive' | 'trash' | 'spam';
+}
+
+export type EmailFolder = 'inbox' | 'archive' | 'trash' | 'spam';
+
+export type BrowserContextAction = 'scrapePage' | 'saveLead' | 'extractEmails' | 'extractPhones' | 'screenshot' | 'saveCompany' | 'sendToCrm';
+
+export interface BrowserContextResult {
+  action: BrowserContextAction;
+  status: 'start' | 'done' | 'error';
+  error?: string;
+  extracted?: { ok: boolean; businessName?: string; website?: string; email?: string; phone?: string; description?: string; socialLinks?: string[] };
+  captureResult?: { inserted?: boolean; id?: string; blacklisted?: boolean };
+  emails?: string[];
+  phones?: string[];
+  filePath?: string;
+  deep?: { ok: boolean; error?: string };
+  queueResult?: { ok: boolean; error?: string };
+}
+
 export interface FollowUpRender {
   subject: string;
   body: string;
@@ -367,6 +422,7 @@ export interface ModuleMeta {
 }
 
 export type ModuleName =
+  | 'home'
   | 'dashboard'
   | 'browser'
   | 'leads'

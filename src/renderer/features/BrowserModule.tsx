@@ -97,7 +97,7 @@ const BOTTOM_TABS = ['Results', 'Activity', 'Errors', 'Downloads'] as const;
 type BottomTab = typeof BOTTOM_TABS[number];
 
 export default function BrowserModule() {
-  const { addToast, setActiveModule } = useUIStore();
+  const { addToast, setActiveModule, browserNavUrl, setBrowserNavUrl } = useUIStore();
 
   // --- Browser state ---
   const [tabs, setTabs] = useState<BrowserTab[]>(() => [{ id: newTabId(), url: 'https://www.google.com/maps', title: '' }]);
@@ -183,6 +183,54 @@ export default function BrowserModule() {
   const startTimeRef = useRef(0);
   const configPanelRef = useRef<ImperativePanelHandle>(null);
   const bottomPanelRef = useRef<ImperativePanelHandle>(null);
+  const webviewContainerRef = useRef<HTMLDivElement>(null);
+
+  // react-resizable-panels resizes the webview's container without ever
+  // touching the window, so the guest's (separate-process) compositor
+  // surface never gets told to repaint — it goes solid blank until the user
+  // drags something. webContents.invalidate() (called in main, since the
+  // webview tag doesn't expose it directly) forces a fresh frame.
+  useEffect(() => {
+    const container = webviewContainerRef.current;
+    if (!container) return;
+    let debounceTimer: ReturnType<typeof setTimeout>;
+    const nudge = () => {
+      const wv = webviewRef.current;
+      if (!wv || !readyRef.current) return;
+      try {
+        ipc.invalidateWebview(wv.getWebContentsId());
+      } catch {}
+      // Electron's own compositor invalidation isn't enough for pages (like
+      // Google Maps) whose canvas only redraws in response to the DOM
+      // 'resize' event — the guest process resizes its surface but never
+      // fires that event on its own, since the resize originated from the
+      // host layout, not a real OS window resize.
+      try {
+        wv.executeJavaScript('window.dispatchEvent(new Event("resize"))').catch(() => {});
+      } catch {}
+      // Belt-and-braces: invalidate()/the synthetic resize event above only
+      // ask the *guest* to repaint. What actually fails here is the *host*
+      // element's own compositor layer failing to pick up its new bounds
+      // when only its flex container (not the webview tag itself) changes
+      // size. Forcing a real reflow on the webview tag — collapse it to 0,
+      // read back layout (the offsetHeight read forces the browser to
+      // actually flush the collapse instead of coalescing it with the
+      // re-expand below), then restore it — makes Chromium recompute and
+      // repaint the guest's compositor surface at its true final bounds.
+      try {
+        const style = wv.style;
+        style.display = 'none';
+        void wv.offsetHeight;
+        style.display = '';
+      } catch {}
+    };
+    const observer = new ResizeObserver(() => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(nudge, 120);
+    });
+    observer.observe(container);
+    return () => { clearTimeout(debounceTimer); observer.disconnect(); };
+  }, []);
 
   // The webview is mounted exactly ONCE, in a single fixed position in the
   // tree (see the return below) — toggling Scrape Mode used to render two
@@ -282,6 +330,25 @@ export default function BrowserModule() {
     }
   };
 
+  // Forces every page the webview loads into dark mode — Chromium's native
+  // force-dark-mode flag only repaints styled DOM/CSS content and leaves
+  // canvas/WebGL content (e.g. Google Maps' tiles) untouched, so instead
+  // this inverts the whole page and re-inverts media elements back to
+  // normal — the same technique "Dark Reader"-style extensions use. Runs
+  // on every dom-ready (i.e. every navigation, not just the first load).
+  useEffect(() => {
+    const el = webviewRef.current;
+    if (!el) return;
+    const onDomReady = () => {
+      el.insertCSS(`
+        html { filter: invert(1) hue-rotate(180deg) !important; background: #fff !important; }
+        img, video, picture { filter: invert(1) hue-rotate(180deg) !important; }
+      `).catch(() => {});
+    };
+    el.addEventListener('dom-ready', onDomReady);
+    return () => { el.removeEventListener('dom-ready', onDomReady); };
+  }, []);
+
   useEffect(() => {
     const el = webviewRef.current;
     if (!el) return;
@@ -346,6 +413,55 @@ export default function BrowserModule() {
     try { webviewRef.current?.findInPage(findQuery, { forward, findNext }); } catch {}
   };
 
+  // Right-click context menu results — the menu itself lives entirely in
+  // main.js/browserContextMenu.js (it has to: a <webview> guest's
+  // 'context-menu' event only fires on that guest's own WebContents, which
+  // only the main process can reach). This just reflects the outcome back
+  // into the UI: a toast, and for actions that produce lead data, the same
+  // extract/save panel the toolbar's "Extract Lead" button already shows.
+  useEffect(() => {
+    return ipc.onBrowserContextResult((payload) => {
+      const label: Record<string, string> = {
+        scrapePage: 'Scrape Page', saveLead: 'Save Lead', extractEmails: 'Extract Emails',
+        extractPhones: 'Extract Phones', screenshot: 'Capture Screenshot', saveCompany: 'Save Company',
+        sendToCrm: 'Send to CRM',
+      };
+      if (payload.status === 'error') {
+        addToast(`${label[payload.action]} failed: ${payload.error || 'unknown error'}`, 'error');
+        return;
+      }
+      if (payload.status !== 'done') return;
+
+      switch (payload.action) {
+        case 'scrapePage':
+          if (payload.extracted) { setExtracted(payload.extracted); setSidebarTab('extract'); }
+          addToast('Page scraped', 'success');
+          break;
+        case 'saveLead':
+          if (payload.captureResult?.id) setSavedLeadId(payload.captureResult.id);
+          addToast(payload.captureResult?.inserted ? 'Saved as lead' : 'Already a lead (duplicate)', payload.captureResult?.inserted ? 'success' : 'info');
+          break;
+        case 'extractEmails':
+          addToast(payload.emails?.length ? `${payload.emails.length} email(s) copied to clipboard: ${payload.emails.join(', ')}` : 'No emails found on this page', payload.emails?.length ? 'success' : 'info', payload.emails?.length ? 6000 : 4000);
+          break;
+        case 'extractPhones':
+          addToast(payload.phones?.length ? `${payload.phones.length} phone(s) copied to clipboard: ${payload.phones.join(', ')}` : 'No phone numbers found on this page', payload.phones?.length ? 'success' : 'info', payload.phones?.length ? 6000 : 4000);
+          break;
+        case 'screenshot':
+          addToast(payload.filePath ? `Screenshot saved: ${payload.filePath}` : 'Screenshot captured', 'success');
+          break;
+        case 'saveCompany':
+          if (payload.captureResult?.id) setSavedLeadId(payload.captureResult.id);
+          addToast(payload.deep?.ok ? 'Company saved with full profile (deep scan complete)' : 'Company saved — deep scan failed, lead still captured', payload.deep?.ok ? 'success' : 'warning');
+          break;
+        case 'sendToCrm':
+          if (payload.captureResult?.id) setSavedLeadId(payload.captureResult.id);
+          addToast('Sent to CRM pipeline', 'success');
+          break;
+      }
+    });
+  }, [addToast]);
+
   // Downloads: one subscription for the lifetime of the module — the main
   // process pushes progress for every download across every profile session.
   useEffect(() => {
@@ -377,6 +493,19 @@ export default function BrowserModule() {
     setActiveTabId(tab.id);
     navigate(tab.url);
   };
+
+  // Other modules (Leads' "Open website"/"View on Maps"/LinkedIn, etc.)
+  // set browserNavUrl + switch to this module instead of shelling out to
+  // the OS's default browser — this opens that URL in a fresh tab here and
+  // clears the request so it doesn't refire on the next unrelated render.
+  useEffect(() => {
+    if (!browserNavUrl) return;
+    const tab: BrowserTab = { id: newTabId(), url: browserNavUrl, title: '' };
+    setTabs((prev) => [...prev, tab]);
+    setActiveTabId(tab.id);
+    navigate(tab.url);
+    setBrowserNavUrl(null);
+  }, [browserNavUrl, navigate, setBrowserNavUrl]);
 
   const handleSwitchTab = (id: string) => {
     if (id === activeTabId || isRunning) return;
@@ -1167,7 +1296,7 @@ export default function BrowserModule() {
                     <h4>Live Map</h4>
                     {configCollapsed && <button className="btn-secondary" onClick={() => configPanelRef.current?.expand()}>☰ Show Config</button>}
                   </div>
-                  <div style={{ flex: 1, borderRadius: 'var(--radius-lg)', overflow: 'hidden', border: '1px solid var(--border)', background: 'white' }}>
+                  <div ref={webviewContainerRef} style={{ flex: 1, borderRadius: 'var(--radius-lg)', overflow: 'hidden', border: '1px solid var(--border)', background: 'white' }}>
                     <webview key={activeProfile.partition} ref={webviewRef} src={url} partition={activeProfile.partition} useragent={chromeUserAgent} allowpopups={true} style={{ width: '100%', height: '100%' }} />
                   </div>
                 </div>

@@ -108,7 +108,10 @@ CREATE TABLE IF NOT EXISTS messages (
   inReplyTo TEXT,
   uid INTEGER,
   status TEXT,                     -- 'sent' | 'failed' | 'received'
-  at TEXT
+  at TEXT,
+  isRead INTEGER DEFAULT 0,
+  isStarred INTEGER DEFAULT 0,
+  folder TEXT DEFAULT 'inbox'      -- 'inbox' | 'archive' | 'trash' | 'spam'
 );
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(threadId);
 CREATE INDEX IF NOT EXISTS idx_messages_lead ON messages(leadId);
@@ -144,7 +147,27 @@ class Database {
       this.db = new this.SQL.Database();
     }
     this.db.run(SCHEMA);
+    this._migrate();
     this.persist();
+  }
+
+  // Additive column migrations for tables created before these columns
+  // existed — CREATE TABLE IF NOT EXISTS above is a no-op on an existing
+  // table, so new columns have to be bolted on here. Each ALTER is
+  // try/caught individually since sql.js's ALTER TABLE has no "IF NOT
+  // EXISTS ADD COLUMN" form and re-running an already-applied one throws.
+  _migrate() {
+    const alters = [
+      "ALTER TABLE messages ADD COLUMN isRead INTEGER DEFAULT 0",
+      "ALTER TABLE messages ADD COLUMN isStarred INTEGER DEFAULT 0",
+      "ALTER TABLE messages ADD COLUMN folder TEXT DEFAULT 'inbox'",
+    ];
+    for (const sql of alters) {
+      try { this.db.run(sql); } catch { /* column already exists */ }
+    }
+    // Inbound messages created before isRead existed should read as read
+    // (already-seen mail), not flood the inbox with false-unread badges.
+    try { this.db.run("UPDATE messages SET isRead = 1 WHERE direction = 'outbound' AND isRead IS NULL"); } catch {}
   }
 
   // Writes the in-memory database back to disk. Called after every mutation
@@ -665,13 +688,14 @@ class Database {
     const id = message.id || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
     this.db.run(
       `INSERT INTO messages (id, threadId, accountId, leadId, direction, fromAddr, toAddr,
-        subject, bodyText, snippet, messageId, inReplyTo, uid, status, at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        subject, bodyText, snippet, messageId, inReplyTo, uid, status, at, isRead, isStarred, folder)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         id, message.threadId, message.accountId, message.leadId || null, message.direction,
         message.fromAddr || '', message.toAddr || '', message.subject || '', message.bodyText || '',
         message.snippet || '', message.messageId || '', message.inReplyTo || '', message.uid || null,
         message.status || '', message.at || new Date().toISOString(),
+        message.direction === 'outbound' ? 1 : 0, 0, 'inbox',
       ]
     );
     this.persist();
@@ -690,6 +714,58 @@ class Database {
     if (!result.length) return [];
     const { columns, values } = result[0];
     return values.map((row) => this._rowToAccount(columns, row));
+  }
+
+  // --- Inbox: threads with their latest message, filterable by folder/search ---
+
+  getThreads({ folder = 'inbox', accountId = null, search = '' } = {}) {
+    const params = [];
+    let sql = `
+      SELECT t.id as threadId, t.accountId, t.leadId, t.subject, t.lastMessageAt,
+             m.id as lastMsgId, m.fromAddr, m.toAddr, m.snippet, m.direction, m.isRead, m.isStarred, m.folder,
+             (SELECT COUNT(*) FROM messages WHERE threadId = t.id AND isRead = 0 AND direction = 'inbound') as unreadCount
+      FROM threads t
+      JOIN messages m ON m.id = (
+        SELECT id FROM messages WHERE threadId = t.id AND folder = ?
+        ORDER BY at DESC LIMIT 1
+      )
+      WHERE m.folder = ?`;
+    params.push(folder, folder);
+    if (accountId) { sql += ' AND t.accountId = ?'; params.push(accountId); }
+    if (search) {
+      sql += ' AND (t.subject LIKE ? OR m.fromAddr LIKE ? OR m.toAddr LIKE ? OR m.snippet LIKE ?)';
+      const like = `%${search}%`;
+      params.push(like, like, like, like);
+    }
+    sql += ' ORDER BY m.at DESC';
+    const result = this.db.exec(sql, params);
+    if (!result.length) return [];
+    const { columns, values } = result[0];
+    return values.map((row) => this._rowToAccount(columns, row));
+  }
+
+  markMessageRead(id, isRead = true) {
+    this.db.run('UPDATE messages SET isRead = ? WHERE id = ?', [isRead ? 1 : 0, id]);
+    this.persist();
+    return { ok: true };
+  }
+
+  markThreadRead(threadId, isRead = true) {
+    this.db.run('UPDATE messages SET isRead = ? WHERE threadId = ?', [isRead ? 1 : 0, threadId]);
+    this.persist();
+    return { ok: true };
+  }
+
+  starMessage(id, isStarred = true) {
+    this.db.run('UPDATE messages SET isStarred = ? WHERE id = ?', [isStarred ? 1 : 0, id]);
+    this.persist();
+    return { ok: true };
+  }
+
+  moveThreadToFolder(threadId, folder) {
+    this.db.run('UPDATE messages SET folder = ? WHERE threadId = ?', [folder, threadId]);
+    this.persist();
+    return { ok: true };
   }
 
   // --- OAuth app registrations (BYOC or built-in) ---

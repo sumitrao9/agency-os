@@ -19,6 +19,7 @@ export default function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const commands: CommandItem[] = [
+    { id: 'go-home', label: 'Go to Home', desc: 'Workspace overview and quick launch', icon: '⌂', shortcut: '⌘0', action: () => { setActiveModule('home' as ModuleName); setCommandPaletteOpen(false); } },
     { id: 'go-dashboard', label: 'Go to Dashboard', desc: 'View your business overview', icon: '◉', shortcut: '⌘1', action: () => { setActiveModule('dashboard' as ModuleName); setCommandPaletteOpen(false); } },
     { id: 'go-leads', label: 'Go to Leads', desc: 'Manage your lead pipeline', icon: '⊞', shortcut: '⌘2', action: () => { setActiveModule('leads' as ModuleName); setCommandPaletteOpen(false); } },
     { id: 'go-browser', label: 'Go to Browser + Scraper', desc: 'Investigate businesses, browse, or run a mass scrape', icon: '⊙', shortcut: '⌘3', action: () => { setActiveModule('browser' as ModuleName); setCommandPaletteOpen(false); } },

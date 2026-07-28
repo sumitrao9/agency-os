@@ -17,6 +17,12 @@ const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/gmail.send',
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/userinfo.email',
+  // GmailProvider.fetchNew() syncs the inbox over raw IMAP (imap.gmail.com)
+  // via XOAUTH2, not the Gmail REST API — Google requires this specific
+  // legacy-protocol scope for that, separate from gmail.readonly/gmail.send
+  // above which only cover REST API calls. Without it IMAP login fails with
+  // "Command failed" even though the REST-based send/verify work fine.
+  'https://mail.google.com/',
 ];
 
 /**

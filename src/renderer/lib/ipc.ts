@@ -26,6 +26,10 @@ import type {
   Diagnostics,
   ReplyCheckResult,
   NewReply,
+  EmailThread,
+  EmailMessage,
+  EmailFolder,
+  BrowserContextResult,
   BlacklistEntry,
   BlacklistInput,
   DeepScanResult,
@@ -74,6 +78,11 @@ export interface AgencyOSAPI {
   getOAuthApp(provider: 'google' | 'microsoft'): Promise<OAuthAppInfo>;
   saveOAuthApp(provider: 'google' | 'microsoft', clientId: string, clientSecret: string, redirectUri?: string): Promise<{ ok: boolean }>;
   syncEmail(accountId?: string): Promise<EmailSyncResult>;
+  listThreads(opts?: { folder?: EmailFolder; accountId?: string; search?: string }): Promise<EmailThread[]>;
+  getThreadMessages(threadId: string): Promise<EmailMessage[]>;
+  markThreadRead(threadId: string, isRead: boolean): Promise<{ ok: boolean }>;
+  starMessage(messageId: string, isStarred: boolean): Promise<{ ok: boolean }>;
+  moveThread(threadId: string, folder: EmailFolder): Promise<{ ok: boolean }>;
 
   // Location spoof
   saveLocationSpoof(config: LocationSpoof): Promise<void>;
@@ -132,6 +141,7 @@ export interface AgencyOSAPI {
   setBrowserProxy(partition: string, proxyRules: string): Promise<{ ok: boolean; error?: string }>;
   showDownloadInFolder(savePath: string): Promise<{ ok: boolean }>;
   onDownloadUpdate(callback: (update: DownloadUpdate) => void): () => void;
+  onBrowserContextResult(callback: (payload: BrowserContextResult) => void): () => void;
 
   // Action queue
   getActionQueue(): Promise<QueueEntry[]>;
@@ -152,6 +162,7 @@ export interface AgencyOSAPI {
   windowMaximize(): void;
   windowClose(): void;
   windowIsMaximized(): Promise<boolean>;
+  invalidateWebview(webContentsId: number): void;
 }
 
 export interface ScraperScripts {
@@ -222,6 +233,11 @@ class IpcBridge {
   async getOAuthApp(provider: 'google' | 'microsoft'): Promise<OAuthAppInfo> { return this.api.getOAuthApp?.(provider) ?? { clientId: '', source: 'built-in' }; }
   async saveOAuthApp(provider: 'google' | 'microsoft', clientId: string, clientSecret: string, redirectUri?: string): Promise<{ ok: boolean }> { return this.api.saveOAuthApp?.(provider, clientId, clientSecret, redirectUri) ?? { ok: false }; }
   async syncEmail(accountId?: string): Promise<EmailSyncResult> { return this.api.syncEmail?.(accountId) ?? { ok: false, newMessages: [] }; }
+  async listThreads(opts?: { folder?: EmailFolder; accountId?: string; search?: string }): Promise<EmailThread[]> { return this.api.listThreads?.(opts) ?? []; }
+  async getThreadMessages(threadId: string): Promise<EmailMessage[]> { return this.api.getThreadMessages?.(threadId) ?? []; }
+  async markThreadRead(threadId: string, isRead: boolean): Promise<{ ok: boolean }> { return this.api.markThreadRead?.(threadId, isRead) ?? { ok: false }; }
+  async starMessage(messageId: string, isStarred: boolean): Promise<{ ok: boolean }> { return this.api.starMessage?.(messageId, isStarred) ?? { ok: false }; }
+  async moveThread(threadId: string, folder: EmailFolder): Promise<{ ok: boolean }> { return this.api.moveThread?.(threadId, folder) ?? { ok: false }; }
 
   // Location spoof
   async saveLocationSpoof(config: LocationSpoof): Promise<void> { return this.api.saveLocationSpoof?.(config); }
@@ -326,6 +342,9 @@ class IpcBridge {
   onDownloadUpdate(callback: (update: DownloadUpdate) => void): () => void {
     return this.api.onDownloadUpdate?.(callback) ?? (() => {});
   }
+  onBrowserContextResult(callback: (payload: BrowserContextResult) => void): () => void {
+    return this.api.onBrowserContextResult?.(callback) ?? (() => {});
+  }
 
   async getActionQueue(): Promise<QueueEntry[]> {
     return this.api.getActionQueue?.() ?? [];
@@ -363,6 +382,7 @@ class IpcBridge {
   windowMaximize(): void { this.api.windowMaximize?.(); }
   windowClose(): void { this.api.windowClose?.(); }
   async windowIsMaximized(): Promise<boolean> { return this.api.windowIsMaximized?.() ?? false; }
+  invalidateWebview(webContentsId: number): void { this.api.invalidateWebview?.(webContentsId); }
 }
 
 export const ipc = new IpcBridge();

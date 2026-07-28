@@ -21,6 +21,12 @@ interface UIState {
   composeLeadId: string | null;
   setComposeLeadId: (leadId: string | null) => void;
 
+  // "Open website"/"View on Maps" etc. from Leads (or any other module)
+  // jumps to the in-app Browser module and opens this URL there, instead
+  // of shelling out to the OS's default browser.
+  browserNavUrl: string | null;
+  setBrowserNavUrl: (url: string | null) => void;
+
   // Modals
   commandPaletteOpen: boolean;
   globalSearchOpen: boolean;
@@ -80,16 +86,17 @@ function applyThemeToDom(s: ThemeSettings) {
 export const useUIStore = create<UIState>((set, get) => ({
   // Default theme
   themeMode: 'dark',
-  accentHue: 140,
+  accentHue: 211,
   accentSaturation: 100,
-  accentLightness: 70,
+  accentLightness: 50,
   fontSize: 13,
   spacing: 'comfortable',
 
   // Layout defaults
   sidebarCollapsed: false,
-  activeModule: 'dashboard',
+  activeModule: 'home',
   composeLeadId: null,
+  browserNavUrl: null,
   rightPanelTab: 'jobs',
   rightPanelOpen: false,
 
@@ -157,6 +164,7 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   setActiveModule: (module) => set({ activeModule: module }),
   setComposeLeadId: (leadId) => set({ composeLeadId: leadId }),
+  setBrowserNavUrl: (url) => set({ browserNavUrl: url }),
 
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
   setRightPanelOpen: (open) => set({ rightPanelOpen: open }),

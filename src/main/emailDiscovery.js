@@ -1,14 +1,14 @@
 // src/main/emailDiscovery.js
 //
-// Visits a lead's website in a HIDDEN BrowserWindow (show: false) to find
-// an email address and social links — the same extraction goal as the
-// Chrome extension's "Deep Enrich" feature, but architecturally better:
-// the extension could only ever borrow your one visible tab to do this
-// (interrupting whatever you were looking at). Electron can run this
-// entirely in the background while you keep using the app normally.
+// Visits a lead's website via the shared hidden-browser engine
+// (browserEngine.js) to find an email address and social links — the same
+// extraction goal as the Chrome extension's "Deep Enrich" feature, but
+// architecturally better: the extension could only ever borrow your one
+// visible tab to do this (interrupting whatever you were looking at).
+// Electron can run this entirely in the background while you keep using
+// the app normally.
 
-const { BrowserWindow } = require('electron');
-const { enableAdblock } = require('./adblock');
+const browserEngine = require('./browserEngine');
 
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
 const CONTACT_PATHS = ['', '/contact', '/contact-us', '/about'];
@@ -78,13 +78,7 @@ async function discoverEmail(website) {
     return { ok: false, error: 'Invalid website URL', pagesChecked: 0 };
   }
 
-  const win = new BrowserWindow({
-    show: false,
-    webPreferences: { offscreen: true, images: false }, // never render images — this is a text-extraction pass, not a visit
-  });
-
-  try {
-    await enableAdblock(win.webContents.session);
+  return browserEngine.withPage(async (win) => {
     const websiteQuality = await checkWebsiteQuality(win, base);
 
     let pagesChecked = 0;
@@ -121,13 +115,7 @@ async function discoverEmail(website) {
     } catch (e) {
       return { ok: false, error: 'No email found on homepage/contact/about pages', pagesChecked, websiteQuality };
     }
-  } finally {
-    // Always close the hidden window, success or failure — this is what
-    // prevents the exact "tab leak" class of bug the extension's Deep
-    // Enrich had to guard against explicitly. Now closed exactly once per
-    // discoverEmail() call instead of once per page visited.
-    if (!win.isDestroyed()) win.destroy();
-  }
+  });
 }
 
 module.exports = { discoverEmail };

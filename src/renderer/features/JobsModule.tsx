@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import ipc from '../lib/ipc';
 import type { AutomationConsoleState } from '@shared/types';
+import { PageHeader, Card, StatTile } from '../components/ui';
 
 export default function JobsModule() {
   const [state, setState] = useState<AutomationConsoleState>({
@@ -22,18 +23,22 @@ export default function JobsModule() {
     } catch {}
   };
 
+  const running = state.jobs.filter((j) => j.status === 'running').length;
+  const failed = state.jobs.filter((j) => j.status === 'failed').length;
+
   return (
     <div className="jobs-module" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-      <div className="module-header">
-        <div className="module-header-info">
-          <h2>Jobs</h2>
-          <p>Background job queue and execution status</p>
-        </div>
+      <PageHeader title="Jobs" description="Background job queue and execution status" />
+
+      <div className="kpi-grid">
+        <StatTile accent="blue" label="Running" value={running} />
+        <StatTile accent="purple" label="Queued" value={state.queue.length} />
+        <StatTile accent={failed > 0 ? 'orange' : 'green'} label="Failed" value={failed} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
         {/* Active Jobs */}
-        <div className="dashboard-card">
+        <Card>
           <h4 style={{ marginBottom: 'var(--space-3)' }}>Active Jobs ({state.jobs.length})</h4>
           {state.jobs.map((job) => (
             <div key={job.id} className="job-item">
@@ -57,10 +62,10 @@ export default function JobsModule() {
           {state.jobs.length === 0 && (
             <div style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>No active jobs</div>
           )}
-        </div>
+        </Card>
 
         {/* Queue & Logs */}
-        <div className="dashboard-card">
+        <Card>
           <h4 style={{ marginBottom: 'var(--space-3)' }}>Queue ({state.queue.length})</h4>
           {state.queue.map((item) => (
             <div key={item.id} className="job-queue-item">
@@ -74,7 +79,7 @@ export default function JobsModule() {
           {state.queue.length === 0 && (
             <div style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>Queue is empty</div>
           )}
-        </div>
+        </Card>
       </div>
     </div>
   );

@@ -191,9 +191,6 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
     for (const err of state.errors.slice(-5).reverse()) {
       alerts.push({ id: `alert-err-${err.at}`, label: err.message, severity: 'error' });
     }
-    if (jobs.length === 0 && alerts.length === 0) {
-      alerts.push({ id: 'alert-idle', label: 'No background jobs running', severity: 'info' });
-    }
 
     return { jobs, queue, alerts };
   }
@@ -816,9 +813,16 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
         return resolveOAuthAppCreds(payload && payload.provider);
       case 'email:oauthApp:save': {
         if (!state.db) return { ok: false, error: 'Database not ready' };
+        // The renderer never receives the decrypted secret back (see
+        // resolveOAuthAppCreds/email:oauthApp:get), so its Client Secret
+        // field always starts empty — Settings > Integrations only sends a
+        // non-empty clientSecret when the user actually typed a new one.
+        // Passing undefined (not '') here lets setOAuthApp's fallback keep
+        // whatever secret is already stored instead of wiping it out on
+        // every unrelated Save click.
         state.db.setOAuthApp(payload.provider, {
           clientId: payload.clientId || '',
-          clientSecretEncrypted: payload.clientSecret ? encryptSecret(payload.clientSecret) : '',
+          clientSecretEncrypted: payload.clientSecret ? encryptSecret(payload.clientSecret) : undefined,
           redirectUri: payload.redirectUri || '',
         });
         return { ok: true };
@@ -857,6 +861,18 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
       }
       case 'email:getSendCount':
         return state.mailEngine ? state.mailEngine.getSendCount(payload) : { count: 0, warnAt: SMTP_WARN_AT, hardStopAt: SMTP_HARD_STOP_AT };
+
+      // --- Inbox: threads/messages ---
+      case 'email:threads:list':
+        return state.db ? state.db.getThreads(payload || {}) : [];
+      case 'email:threads:messages':
+        return state.db ? state.db.getThreadMessages(payload) : [];
+      case 'email:threads:markRead':
+        return state.db ? state.db.markThreadRead(payload.threadId, payload.isRead !== false) : { ok: false };
+      case 'email:threads:star':
+        return state.db ? state.db.starMessage(payload.messageId, payload.isStarred !== false) : { ok: false };
+      case 'email:threads:move':
+        return state.db ? state.db.moveThreadToFolder(payload.threadId, payload.folder) : { ok: false };
       case 'automation:consoleAction':
         return applyAutomationConsoleAction(payload);
       case 'leads:get': {
@@ -983,7 +999,7 @@ function createAppRuntime({ app, browserWindowFactory, isTest = false }) {
         return state.db ? state.db.isBlacklisted(payload) : null;
       case 'theme:get':
         return loadJsonFile(path.join(userDataDir, 'theme.json'), {
-          mode: 'dark', accentHue: 140, accentSaturation: 100, accentLightness: 70,
+          mode: 'dark', accentHue: 211, accentSaturation: 100, accentLightness: 50,
           fontSize: 13, spacing: 'comfortable'
         });
       case 'theme:save':

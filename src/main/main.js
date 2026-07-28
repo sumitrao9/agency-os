@@ -1,11 +1,20 @@
 // src/main/main.js — Electron entry point
-const { app, BrowserWindow, ipcMain, dialog, shell, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, webContents } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { createAppRuntime } = require('./appRuntime');
 const { parseCsv, stringifyCsv } = require('./csv');
 const { applyRules } = require('./ruleEngine');
-const { autoUpdater } = require('electron-updater');
+const { attachBrowserContextMenu } = require('./browserContextMenu');
+// Lazy — importing electron-updater at module load time constructs its
+// NsisUpdater singleton immediately, which reads app.getVersion() before
+// Electron has finished wiring up the app module in this entry point,
+// crashing the whole process before a window is ever created.
+let autoUpdater;
+function getAutoUpdater() {
+  if (!autoUpdater) ({ autoUpdater } = require('electron-updater'));
+  return autoUpdater;
+}
 
 // Last-resort safety net: without these, any unhandled error/rejection
 // anywhere in the main process (e.g. a stray socket 'error' event from a
@@ -97,6 +106,7 @@ let runtime;
 // this repo is private, so electron-updater needs a GH_TOKEN with `repo`
 // scope in the environment the packaged app runs under to read releases.
 function setupAutoUpdater() {
+  const autoUpdater = getAutoUpdater();
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
@@ -151,6 +161,7 @@ app.on('ready', async () => {
         prefs.contextIsolation = false;
         if (prefs.partition) attachDownloadTracking(session.fromPartition(prefs.partition), win);
       });
+      attachBrowserContextMenu(win, runtime);
 
       // The renderer is a Vite/React app: src/renderer/index.html references
       // main.tsx, which Chromium cannot execute directly. Always load the
@@ -290,6 +301,15 @@ function setupIpcHandlers() {
   });
   ipcMain.on('window:close', (e) => BrowserWindow.fromWebContents(e.sender)?.close());
   ipcMain.handle('window:isMaximized', (e) => BrowserWindow.fromWebContents(e.sender)?.isMaximized() ?? false);
+  // A <webview> guest's compositor surface sometimes never repaints after
+  // its container is resized by a collapsing/expanding layout panel (the
+  // guest is a separate process — the renderer resizing its CSS box gives
+  // Chromium no signal to recomposite). invalidate() forces a fresh frame;
+  // this is called by BrowserModule after panel resize/collapse/expand.
+  ipcMain.on('browser:invalidateView', (_, webContentsId) => {
+    const wc = webContents.fromId(webContentsId);
+    if (wc && !wc.isDestroyed()) wc.invalidate();
+  });
   ipcMain.handle('blacklist:add', async (_, p) => runtime.handleIpcRequest('blacklist:add', p));
   ipcMain.handle('blacklist:remove', async (_, p) => runtime.handleIpcRequest('blacklist:remove', p));
   ipcMain.handle('blacklist:list', async () => runtime.handleIpcRequest('blacklist:list'));
@@ -412,12 +432,14 @@ app.on('before-quit', () => {
   stopReplyPolling();
   stopDailyJobScheduler();
   if (runtime) runtime.shutdown();
+  require('./browserEngine').destroy();
 });
 
 app.on('window-all-closed', () => {
   stopReplyPolling();
   stopDailyJobScheduler();
   if (runtime) runtime.shutdown();
+  require('./browserEngine').destroy();
   if (process.platform !== 'darwin') app.quit();
 });
 
