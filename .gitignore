@@ -4,4 +4,3 @@ release/
 *.log
 .DS_Store
 tsconfig.node.tsbuildinfo
-.claude/
