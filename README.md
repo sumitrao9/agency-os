@@ -93,3 +93,10 @@ Every module above was tested independently before being wired together —
 (`test_backend.js`) that starts a real server and makes real HTTP requests
 against it; `ruleEngine.js`, `templates.js`, and `mailer.js` have their own
 (`test_rules_email.js`).
+
+## Support / Hosted / Hire
+- **Hosted/Pro**: need a managed 24/7 endpoint, API keys, quotas, or integration help? Open an issue: https://github.com/sumitrao9/agency-os/issues
+- **Sponsor**: GitHub Sponsors (FUNDING.yml) supports maintenance.
+- **Hire/Consulting**: custom features, deployment, or automation workflows (authorized use only).
+
+*Built by [Sumit Yadav](https://github.com/sumitrao9). Authorized/ethical use only.*
